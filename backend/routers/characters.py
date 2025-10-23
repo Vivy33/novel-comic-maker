@@ -7,9 +7,10 @@ from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from typing import List
 import logging
 from datetime import datetime
+from pathlib import Path
 
-from services.file_system import ProjectFileSystem
-from models.character import CharacterInfo, CharacterCreateRequest
+from ..services.file_system import ProjectFileSystem
+from ..models.character import CharacterInfo, CharacterCreateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ async def create_character(
 ):
     """
     创建新角色
-    Create a new character
+    Create new character
     """
     try:
         # 查找项目路径
@@ -80,41 +81,39 @@ async def create_character(
         if not project_path:
             raise HTTPException(status_code=404, detail="项目不存在")
 
-        # 读取现有角色列表
-        characters_file = fs.projects_dir / project_path / "characters" / "characters.json"
+        # 读取角色列表
+        characters_dir = fs.projects_dir / project_path / "characters"
+        characters_file = characters_dir / "characters.json"
+
+        if not characters_dir.exists():
+            characters_dir.mkdir(parents=True, exist_ok=True)
+
         characters = []
         if characters_file.exists():
             characters = fs._load_json(characters_file)
 
-        # 检查角色名是否已存在
-        for existing_char in characters:
-            if existing_char.get("name") == character.name:
-                raise HTTPException(status_code=400, detail="角色名已存在")
+        # 检查角色是否存在
+        for existing in characters:
+            if existing.get("name") == character.name:
+                raise HTTPException(status_code=400, detail="角色已存在")
 
-        # 添加新角色
+        # 创建角色
         new_character = {
             "name": character.name,
             "description": character.description,
             "appearance": character.appearance,
             "personality": character.personality,
-            "reference_images": []
+            "reference_images": [],
+            "created_at": datetime.now().isoformat()
         }
-
         characters.append(new_character)
 
-        # 保存角色信息
         fs._save_json(characters_file, characters)
 
-        # 记录历史
-        fs._save_history(
-            project_path,
-            "character_created",
-            {"character_name": character.name}
-        )
-
-        logger.info(f"角色创建成功: {character.name}")
-        return {"message": f"角色 {character.name} 创建成功"}
-
+        return {
+            "success": True,
+            "character": CharacterInfo(**new_character)
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -134,6 +133,10 @@ async def upload_character_reference_image(
     Upload character reference image
     """
     try:
+        # 验证文件类型
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="请上传图片文件")
+
         # 查找项目路径
         projects = fs.list_projects()
         project_path = None
@@ -146,47 +149,20 @@ async def upload_character_reference_image(
         if not project_path:
             raise HTTPException(status_code=404, detail="项目不存在")
 
-        # 验证文件类型
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="请上传图片文件")
+        # 保存图片
+        target_dir = fs.projects_dir / project_path / "characters" / character_name
+        target_dir.mkdir(parents=True, exist_ok=True)
 
-        # 保存参考图片
-        character_dir = fs.projects_dir / project_path / "characters" / character_name
-        character_dir.mkdir(exist_ok=True)
-
-        # 生成文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"reference_{timestamp}_{file.filename}"
-        file_path = character_dir / filename
-
-        # 保存文件
-        with open(file_path, "wb") as buffer:
+        target_file = target_dir / file.filename
+        with open(target_file, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
 
-        # 更新角色信息
-        characters_file = fs.projects_dir / project_path / "characters" / "characters.json"
-        if characters_file.exists():
-            characters = fs._load_json(characters_file)
-            for character in characters:
-                if character.get("name") == character_name:
-                    if "reference_images" not in character:
-                        character["reference_images"] = []
-                    character["reference_images"].append(str(file_path))
-                    break
-
-            fs._save_json(characters_file, characters)
-
-        # 记录历史
-        fs._save_history(
-            project_path,
-            "reference_image_uploaded",
-            {"character_name": character_name, "filename": filename}
-        )
-
-        logger.info(f"角色参考图片上传成功: {character_name}/{filename}")
-        return {"message": "参考图片上传成功", "filename": filename}
-
+        return {
+            "success": True,
+            "filename": file.filename,
+            "path": str(target_file)
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -202,7 +178,7 @@ async def get_character_reference_images(
 ):
     """
     获取角色参考图片列表
-    Get character reference images list
+    Get character reference image list
     """
     try:
         # 查找项目路径
@@ -217,20 +193,19 @@ async def get_character_reference_images(
         if not project_path:
             raise HTTPException(status_code=404, detail="项目不存在")
 
-        # 获取角色目录中的图片文件
-        character_dir = fs.projects_dir / project_path / "characters" / character_name
-        if not character_dir.exists():
+        # 列出图片文件
+        target_dir = fs.projects_dir / project_path / "characters" / character_name
+        if not target_dir.exists():
             return []
 
-        image_files = []
-        for file_path in character_dir.glob("reference_*.png"):
-            image_files.append({
-                "filename": file_path.name,
-                "path": str(file_path)
+        images = []
+        for img_file in sorted(target_dir.glob("*.png")):
+            images.append({
+                "filename": img_file.name,
+                "path": str(img_file)
             })
 
-        return image_files
-
+        return images
     except HTTPException:
         raise
     except Exception as e:
@@ -262,38 +237,19 @@ async def delete_character_reference_image(
         if not project_path:
             raise HTTPException(status_code=404, detail="项目不存在")
 
-        # 删除图片文件
-        file_path = fs.projects_dir / project_path / "characters" / character_name / filename
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail="图片文件不存在")
+        # 删除图片
+        target_dir = fs.projects_dir / project_path / "characters" / character_name
+        target_file = target_dir / filename
 
-        file_path.unlink()
+        if not target_file.exists():
+            raise HTTPException(status_code=404, detail="文件不存在")
 
-        # 更新角色信息
-        characters_file = fs.projects_dir / project_path / "characters" / "characters.json"
-        if characters_file.exists():
-            characters = fs._load_json(characters_file)
-            for character in characters:
-                if character.get("name") == character_name:
-                    if "reference_images" in character:
-                        character["reference_images"] = [
-                            img for img in character["reference_images"]
-                            if not img.endswith(filename)
-                        ]
-                        break
+        target_file.unlink()
 
-            fs._save_json(characters_file, characters)
-
-        # 记录历史
-        fs._save_history(
-            project_path,
-            "reference_image_deleted",
-            {"character_name": character_name, "filename": filename}
-        )
-
-        logger.info(f"角色参考图片删除成功: {character_name}/{filename}")
-        return {"message": "参考图片删除成功"}
-
+        return {
+            "success": True,
+            "deleted": filename
+        }
     except HTTPException:
         raise
     except Exception as e:

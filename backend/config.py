@@ -26,8 +26,17 @@ class Settings:
 
     # 项目存储配置
     PROJECTS_DIR: Path = PROJECT_ROOT / "projects"
-    TEMP_DIR: Path = BACKEND_ROOT / "temp"
-    LOGS_DIR: Path = BACKEND_ROOT / "logs"
+    TEMP_DIR: Path = PROJECT_ROOT / "temp"
+    LOGS_DIR: Path = PROJECT_ROOT / "logs"
+
+    # 临时文件子目录
+    TEMP_UPLOADS_DIR: Path = TEMP_DIR / "uploads"
+    TEMP_DOWNLOADS_DIR: Path = TEMP_DIR / "downloads"
+    TEMP_PROCESSING_DIR: Path = TEMP_DIR / "processing"
+
+    # 缓存目录
+    CACHE_DIR: Path = PROJECT_ROOT / "cache"
+    CACHE_AI_IMAGES_DIR: Path = CACHE_DIR / "ai_images"
 
     # 文件上传配置
     MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "10485760"))  # 10MB
@@ -61,6 +70,44 @@ class Settings:
     # 安全配置
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+    # 缓存配置
+    CACHE_CONFIG: dict = {
+        # 文本分析缓存：30分钟，最多100个条目
+        'text_analysis': {
+            'ttl': 1800,        # 30分钟缓存
+            'max_size': 100     # 最大条目数
+        },
+
+        # API响应缓存：5分钟，最多500个条目
+        'api_responses': {
+            'ttl': 300,         # 5分钟缓存
+            'max_size': 500     # 最大条目数
+        },
+
+        # 图片缓存：24小时，最多50个条目
+        'images': {
+            'ttl': 86400,       # 24小时缓存
+            'max_size': 50      # 最大条目数
+        }
+    }
+
+    # 缓存类型映射
+    CACHE_TYPE_MAPPING: dict = {
+        # 文本分析相关
+        'text_compress': 'text_analysis',
+        'text_analysis': 'text_analysis',
+        'character_analysis': 'text_analysis',
+
+        # API调用相关
+        'api_response': 'api_responses',
+        'api_call': 'api_responses',
+        'image_generation': 'api_responses',
+
+        # 文件存储相关
+        'image': 'images',
+        'file': 'images'
+    }
 
     def __init__(self):
         """初始化配置，创建必要的目录"""

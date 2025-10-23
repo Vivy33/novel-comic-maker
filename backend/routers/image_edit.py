@@ -13,12 +13,14 @@ import logging
 import os
 from datetime import datetime
 
-from services.ai_service import AIService
-from services.file_system import ProjectFileSystem
-from utils.image_utils import (
+from ..services.ai_service import AIService
+from ..services.file_system import ProjectFileSystem
+from ..utils.image_utils import (
     encode_file_to_base64,
+    encode_file,
     get_image_info,
     validate_image_file,
+    download_to_temp_images,
     ImageProcessor
 )
 
@@ -257,96 +259,6 @@ async def download_generated_image(filename: str):
         raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
 
 
-@router.post("/project/{project_id}/edit-character")
-async def edit_character_image(
-    project_id: str,
-    character_name: str = Form(...),
-    prompt: str = Form(...),
-    file: UploadFile = File(...),
-    ai_service: AIService = Depends(get_ai_service),
-    fs: ProjectFileSystem = Depends(get_file_system)
-):
-    """
-    为项目中的角色进行图像编辑
-    Edit character image in project
-    """
-    try:
-        # 查找项目路径
-        projects = fs.list_projects()
-        project_path = None
-        for project in projects:
-            if project.get("project_id") == project_id:
-                project_path = project.get("project_path")
-                break
-
-        if not project_path:
-            raise HTTPException(status_code=404, detail="项目不存在")
-
-        # 验证文件
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="请上传图片文件")
-
-        # 保存临时文件并转换为base64
-        temp_dir = "temp/uploads"
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, file.filename)
-
-        with open(temp_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-
-        base64_image = encode_file_to_base64(temp_path)
-
-        # 调用AI服务进行图像编辑
-        result_url = await ai_service.edit_image_with_base64(
-            prompt=f"保持角色{character_name}的特征，{prompt}",
-            base64_image=base64_image,
-            model_preference="qwen",
-            size="1024x1024"
-        )
-
-        # 下载结果到项目目录
-        character_dir = fs.projects_dir / project_path / "characters" / character_name
-        character_dir.mkdir(exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        result_filename = f"edited_{timestamp}.png"
-        result_path = character_dir / result_filename
-
-        # 下载并保存结果
-        await ai_service.download_image_result(result_url, str(character_dir))
-
-        # 更新角色信息
-        characters_file = fs.projects_dir / project_path / "characters" / "characters.json"
-        if characters_file.exists():
-            characters = fs._load_json(characters_file)
-            for character in characters:
-                if character.get("name") == character_name:
-                    if "reference_images" not in character:
-                        character["reference_images"] = []
-                    character["reference_images"].append(str(result_path))
-                    break
-
-            fs._save_json(characters_file, characters)
-
-        # 清理临时文件
-        os.remove(temp_path)
-
-        return {
-            "success": True,
-            "result_url": result_url,
-            "result_filename": result_filename,
-            "character_name": character_name,
-            "project_id": project_id
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"角色图像编辑失败: {e}")
-        raise HTTPException(status_code=500, detail=f"角色图像编辑失败: {str(e)}")
-
-
 @router.get("/models")
 async def get_available_models(ai_service: AIService = Depends(get_ai_service)):
     """
@@ -372,6 +284,206 @@ async def get_available_models(ai_service: AIService = Depends(get_ai_service)):
         raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
 
 
+@router.post("/encode-local")
+async def encode_local_image(file_path: str):
+    """
+    将本地图像文件编码为base64格式
+    Encode local image file to base64 format
+    """
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+
+        # 验证图像文件
+        is_valid, error_msg = validate_image_file(file_path)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # 编码为base64
+        base64_data = encode_file(file_path)
+
+        # 获取图像信息
+        image_info = get_image_info(base64_data)
+
+        return {
+            "success": True,
+            "file_path": file_path,
+            "base64_data": base64_data,
+            "image_info": image_info
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"本地图像编码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"编码失败: {str(e)}")
+
+
+@router.post("/download-to-local")
+async def download_image_to_local(
+    image_url: str = Form(...),
+    filename: Optional[str] = Form(None)
+):
+    """
+    下载图像到本地temp/images目录
+    Download image to local temp/images directory
+    """
+    try:
+        # 下载图像
+        local_path = await download_to_temp_images(image_url, filename)
+
+        # 获取文件信息
+        file_size = os.path.getsize(local_path)
+        relative_path = os.path.relpath(local_path, start="backend")
+
+        return {
+            "success": True,
+            "image_url": image_url,
+            "local_path": local_path,
+            "relative_path": relative_path,
+            "file_size": file_size,
+            "download_time": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"图像下载失败: {e}")
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
+
+
+@router.post("/image-to-image")
+async def image_to_image_generation(
+    prompt: str = Form(...),
+    file: UploadFile = File(...),
+    model_preference: str = Form("doubao-seedream-4-0-250828"),
+    size: str = Form("1024x1024"),
+    strength: float = Form(0.8),
+    ai_service: AIService = Depends(get_ai_service)
+):
+    """
+    图生图功能 - 上传参考图生成新图像
+    Image-to-Image generation - Upload reference image to generate new image
+    """
+    try:
+        # 验证文件类型
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="请上传图片文件")
+
+        # 保存临时文件
+        temp_dir = "temp/uploads"
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, file.filename)
+
+        with open(temp_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+
+        # 验证图像文件
+        is_valid, error_msg = validate_image_file(temp_path)
+        if not is_valid:
+            os.remove(temp_path)
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # 转换为base64
+        base64_image = encode_file_to_base64(temp_path)
+
+        # 调用AI服务进行图生图
+        result_url = await ai_service.image_to_image_with_base64(
+            prompt=prompt,
+            base64_image=base64_image,
+            model_preference=model_preference,
+            size=size,
+            strength=strength
+        )
+
+        # 下载结果到本地
+        local_path = await ai_service.download_image_result(result_url)
+
+        # 清理临时文件
+        os.remove(temp_path)
+
+        return {
+            "success": True,
+            "result_url": result_url,
+            "local_path": local_path,
+            "original_filename": file.filename,
+            "generation_params": {
+                "prompt": prompt,
+                "model_preference": model_preference,
+                "size": size,
+                "strength": strength
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"图生图失败: {e}")
+        raise HTTPException(status_code=500, detail=f"图生图失败: {str(e)}")
+
+
+@router.get("/temp-files")
+async def list_temp_files():
+    """
+    列出temp/images目录中的文件
+    List files in temp/images directory
+    """
+    try:
+        temp_dir = "backend/temp/images"
+        if not os.path.exists(temp_dir):
+            return {"success": True, "files": [], "total_count": 0}
+
+        files = []
+        for filename in os.listdir(temp_dir):
+            file_path = os.path.join(temp_dir, filename)
+            if os.path.isfile(file_path):
+                stat = os.stat(file_path)
+                files.append({
+                    "filename": filename,
+                    "size": stat.st_size,
+                    "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "download_url": f"/image-edit/download/{filename}"
+                })
+
+        files.sort(key=lambda x: x["modified_time"], reverse=True)
+
+        return {
+            "success": True,
+            "files": files,
+            "total_count": len(files)
+        }
+
+    except Exception as e:
+        logger.error(f"列出临时文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"列出文件失败: {str(e)}")
+
+
+@router.delete("/temp-files/{filename}")
+async def delete_temp_file(filename: str):
+    """
+    删除temp/images目录中的指定文件
+    Delete specific file in temp/images directory
+    """
+    try:
+        file_path = os.path.join("backend/temp/images", filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+
+        os.remove(file_path)
+
+        return {
+            "success": True,
+            "message": f"文件 {filename} 已删除"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
+
+
 @router.get("/health")
 async def image_edit_health_check(ai_service: AIService = Depends(get_ai_service)):
     """
@@ -384,7 +496,7 @@ async def image_edit_health_check(ai_service: AIService = Depends(get_ai_service
         # 检查图像编辑相关的模型
         editing_health = {}
         for model_name, is_healthy in health_status.items():
-            if any(keyword in model_name.lower() for keyword in ['qwen', 'image', 'edit']):
+            if any(keyword in model_name.lower() for keyword in ['qwen', 'image', 'edit', 'seedream']):
                 editing_health[model_name] = is_healthy
 
         return {

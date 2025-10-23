@@ -86,12 +86,11 @@ class TextSegmenter:
             '话说', '且说', '却说', '再说'
         ]
 
-        # 场景标记
+        # 场景标记（不含章节关键字）
         self.scene_markers = [
             '清晨', '中午', '下午', '傍晚', '夜晚', '深夜',
             '春天', '夏天', '秋天', '冬天',
-            '室内', '室外', '街头', '家中', '公司', '学校',
-            '第一章', '第二章', '第一回', '第二回'
+            '室内', '室外', '街头', '家中', '公司', '学校'
         ]
 
     async def segment_text(
@@ -178,7 +177,20 @@ class TextSegmenter:
         start_index = 0
 
         for sentence in sentences:
-            # 检查是否开始新段落
+            # 在章节标记处强制断开，优先于长度规则
+            if self._is_chapter_marker(sentence):
+                if current_segment.strip():
+                    segments.append(TextSegment(
+                        content=current_segment.strip(),
+                        start_index=start_index,
+                        end_index=start_index + len(current_segment),
+                        segment_type="general"
+                    ))
+                    start_index += len(current_segment)
+                current_segment = sentence
+                continue
+
+            # 检查是否开始新段落（长度触发）
             if (len(current_segment) + len(sentence) > max_length and
                 len(current_segment) >= min_length):
 
@@ -218,10 +230,12 @@ class TextSegmenter:
             if sentence.startswith(marker):
                 return True
 
-        # 检查是否包含场景标记
+        # 检查是否包含场景标记或章节标记
         for marker in self.scene_markers:
             if marker in sentence:
                 return True
+        if self._is_chapter_marker(sentence):
+            return True
 
         # 检查是否为时间转换
         time_patterns = [
@@ -233,6 +247,24 @@ class TextSegmenter:
             if re.search(pattern, sentence):
                 return True
 
+        return False
+
+    def _is_chapter_marker(self, sentence: str) -> bool:
+        """识别章节标记，如“第一章”、“第二章”、“第一回”等"""
+        s = sentence.strip()
+        # 去掉开头的引号、空格和常见非字母数字符号
+        s = re.sub(r'^[\s\W]+', '', s)
+        # 允许“第…章/回”以及直写形式，兼容中文/英文冒号与空格
+        patterns = [
+            r'^(第[一二三四五六七八九十百零两]+(章|回))(?:[：:\s]|$)',
+            r'^(第一章|第二章|第一回|第二回)(?:[：:\s]|$)'
+        ]
+        for pat in patterns:
+            if re.search(pat, s):
+                return True
+        # 兼容前置少量标点后出现章节标记的情况（前3字符内）
+        if re.search(r'^.{0,3}第[一二三四五六七八九十百零两]+(章|回)', s):
+            return True
         return False
 
     async def _ai_optimize_segments(

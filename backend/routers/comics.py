@@ -6,10 +6,11 @@ Comic Management API Routes
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Any
 import logging
+from pathlib import Path
 
-from services.file_system import ProjectFileSystem
-from services.comic_service import ComicService
-from models.comic import ComicGenerateRequest, ChapterComic
+from ..services.file_system import ProjectFileSystem
+from ..services.comic_service import ComicService
+from ..models.comic import ComicGenerateRequest, ChapterComic
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ async def generate_comic(
             "message": "漫画生成任务已启动"
         }
     except Exception as e:
-        logger.error(f"启动漫画生成失败: {e}")
-        raise HTTPException(status_code=500, detail=f"启动漫画生成失败: {str(e)}")
+        logger.error(f"漫画生成任务启动失败: {e}")
+        raise HTTPException(status_code=500, detail=f"漫画生成任务启动失败: {str(e)}")
 
 
 @router.get("/generate/{task_id}/status")
@@ -58,14 +59,14 @@ async def get_generation_status(
 ):
     """
     获取生成任务状态
-    Get comic generation task status
+    Get generation task status
     """
     try:
         status = await comic_service.get_generation_status(task_id)
         return status
     except Exception as e:
-        logger.error(f"获取生成状态失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取生成状态失败: {str(e)}")
+        logger.error(f"获取任务状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取任务状态失败: {str(e)}")
 
 
 @router.get("/{project_id}/chapters", response_model=List[str])
@@ -74,33 +75,12 @@ async def get_project_chapters(
     fs: ProjectFileSystem = Depends(get_file_system)
 ):
     """
-    获取项目的章节列表
-    Get project chapters list
+    获取项目章节列表
+    Get project chapter list
     """
     try:
-        # 查找项目路径
-        projects = fs.list_projects()
-        project_path = None
-
-        for project in projects:
-            if project.get("project_id") == project_id:
-                project_path = project.get("project_path")
-                break
-
-        if not project_path:
-            raise HTTPException(status_code=404, detail="项目不存在")
-
-        # 获取章节列表
-        chapters_dir = fs.projects_dir / project_path / "chapters"
-        if not chapters_dir.exists():
-            return []
-
-        chapters = [d.name for d in chapters_dir.iterdir() if d.is_dir()]
-        chapters.sort()
-
+        chapters = fs.list_chapters(project_id)
         return chapters
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"获取章节列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取章节列表失败: {str(e)}")
@@ -117,49 +97,8 @@ async def get_chapter_comic(
     Get chapter comic content
     """
     try:
-        # 查找项目路径
-        projects = fs.list_projects()
-        project_path = None
-
-        for project in projects:
-            if project.get("project_id") == project_id:
-                project_path = project.get("project_path")
-                break
-
-        if not project_path:
-            raise HTTPException(status_code=404, detail="项目不存在")
-
-        # 读取章节漫画数据
-        chapter_dir = fs.projects_dir / project_path / "chapters" / chapter_id
-        comic_file = chapter_dir / "comic.json"
-
-        if not comic_file.exists():
-            raise HTTPException(status_code=404, detail="章节漫画不存在")
-
-        # 读取图像列表
-        images_dir = chapter_dir / "images"
-        images = []
-        if images_dir.exists():
-            for img_file in sorted(images_dir.glob("*.png")):
-                images.append({
-                    "filename": img_file.name,
-                    "path": str(img_file)
-                })
-
-        # 读取脚本
-        script_file = chapter_dir / "script.json"
-        script = {}
-        if script_file.exists():
-            script = fs._load_json(script_file)
-
-        return ChapterComic(
-            chapter_id=chapter_id,
-            script=script,
-            images=images,
-            created_at=fs._load_json(comic_file).get("created_at", "")
-        )
-    except HTTPException:
-        raise
+        chapter = fs.get_chapter_comic(project_id, chapter_id)
+        return ChapterComic(**chapter)
     except Exception as e:
         logger.error(f"获取章节漫画失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取章节漫画失败: {str(e)}")
@@ -173,22 +112,18 @@ async def regenerate_chapter_comic(
 ):
     """
     重新生成章节漫画
-    Regenerate chapter comic
+    Regenerate chapter comic content
     """
     try:
-        task_id = await comic_service.regenerate_chapter(
-            project_id=project_id,
-            chapter_id=chapter_id
-        )
-
+        task_id = await comic_service.regenerate_chapter(project_id, chapter_id)
         return {
             "task_id": task_id,
             "status": "started",
-            "message": f"章节 {chapter_id} 重新生成任务已启动"
+            "message": "重新生成任务已启动"
         }
     except Exception as e:
-        logger.error(f"重新生成章节漫画失败: {e}")
-        raise HTTPException(status_code=500, detail=f"重新生成章节漫画失败: {str(e)}")
+        logger.error(f"重新生成章节失败: {e}")
+        raise HTTPException(status_code=500, detail=f"重新生成章节失败: {str(e)}")
 
 
 @router.get("/{project_id}/export")
@@ -199,13 +134,13 @@ async def export_comic(
 ):
     """
     导出漫画
-    Export comic in specified format
+    Export comic
     """
     try:
-        # TODO: 实现漫画导出功能
+        export_path = fs.export_comic(project_id, format)
         return {
-            "message": f"导出功能待实现，格式: {format}",
-            "project_id": project_id
+            "success": True,
+            "export_path": str(export_path)
         }
     except Exception as e:
         logger.error(f"导出漫画失败: {e}")

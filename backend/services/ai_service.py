@@ -226,7 +226,7 @@ class VolcengineService:
                 prompt=prompt,
                 size=size,
                 response_format="url",
-                watermark=True
+                watermark=False
             )
             image_url = resp.data[0].url
             logger.info(f"成功接收到文生图模型 {model} 的响应。")
@@ -250,7 +250,7 @@ class VolcengineService:
                 image=image_url,
                 size="1024x1024",
                 response_format="url",
-                watermark=True
+                watermark=False
             )
             edited_image_url = resp.data[0].url
             logger.info(f"成功接收到图像编辑模型 {model} 的响应。")
@@ -625,7 +625,8 @@ class AIService:
         except Exception:
             from utils.image_utils import download_image_from_url, decode_base64_to_file  # type: ignore
 
-        base_dir = Path(__file__).resolve().parent.parent / "temp" / "images"
+        from ..config import settings
+        base_dir = settings.TEMP_PROCESSING_DIR
         target_dir = Path(output_dir) if output_dir else base_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 

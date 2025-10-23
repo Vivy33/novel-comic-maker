@@ -201,7 +201,7 @@ async def download_image_from_url(
 
 async def download_to_temp_images(image_url: str, filename: Optional[str] = None) -> str:
     """
-    下载图像到 backend/temp/images/ 目录
+    下载图像到 temp/images/ 目录
 
     Args:
         image_url: 图像URL
@@ -210,7 +210,8 @@ async def download_to_temp_images(image_url: str, filename: Optional[str] = None
     Returns:
         下载的文件路径
     """
-    temp_dir = Path(__file__).parent.parent / "temp" / "images"
+    from ..config import settings
+    temp_dir = settings.TEMP_DOWNLOADS_DIR
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     if not filename:
@@ -319,7 +320,10 @@ def compress_base64_if_needed(base64_data: str, max_size: int = 1024*1024) -> st
 class ImageProcessor:
     """图像处理器类"""
 
-    def __init__(self, temp_dir: str = "temp/images"):
+    def __init__(self, temp_dir: Optional[str] = None):
+        if temp_dir is None:
+            from ..config import settings
+            temp_dir = str(settings.TEMP_DOWNLOADS_DIR)
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 

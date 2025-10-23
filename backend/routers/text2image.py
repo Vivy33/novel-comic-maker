@@ -9,8 +9,8 @@ Provides basic text-to-image generation functionality
 from fastapi import APIRouter, HTTPException, Form, Depends
 import logging
 
-from services.ai_service import AIService
-from models.text2image import Text2ImageResponse
+from ..services.ai_service import AIService
+from ..models.text2image import Text2ImageResponse
 
 logger = logging.getLogger(__name__)
 

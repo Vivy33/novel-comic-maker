@@ -12,8 +12,8 @@ from ..services.ai_service import volc_service
 logger = logging.getLogger(__name__)
 
 # 定义模型端点
-GENERATION_MODEL = "doubao-seedream-4.0"
-EDIT_MODEL = "doubao-seededit-3.0-i2i"
+GENERATION_MODEL = "doubao-seedream-4-0-250828"
+EDIT_MODEL = "doubao-seedream-4-0-250828"
 
 class ImageGenerator:
     """
@@ -57,20 +57,22 @@ class ImageGenerator:
             if image_url:
                 # 下载图像到本地
                 try:
-                    filename = f"panel_{panel_number}.png"
-                    # 注意：这里的 project_path 需要与 file_system 服务结合使用来确定最终的输出路径
-                    # 为简化，我们先假设一个 output 目录
-                    output_path = f"{project_path}/output/{filename}"
-                    
-                    # (这里需要一个真实的下载和保存逻辑，暂时使用一个占位符)
-                    # local_path = await file_system.save_image_from_url(image_url, output_path)
-                    logger.info(f"图像已生成，URL: {image_url}。本地保存逻辑待实现。")
-                    
+                    from ..utils.image_utils import download_image_from_url
+                    import time
+
+                    filename = f"panel_{panel_number}_{int(time.time())}.png"
+                    output_dir = f"{project_path}/chapters/chapter_001/images"
+                    output_path = f"{output_dir}/{filename}"
+
+                    # 使用真实的下载逻辑
+                    local_path = await download_image_from_url(image_url, output_path)
+                    logger.info(f"图像已下载到本地: {local_path}")
+
                     generated_images.append({
                         "panel_number": panel_number,
                         "status": "success",
                         "image_url": image_url,
-                        "local_path": output_path # 占位符
+                        "local_path": local_path
                     })
                 except Exception as e:
                     logger.error(f"下载分镜 {panel_number} 的图像失败: {e}")
@@ -89,42 +91,61 @@ class ImageGenerator:
         
         return generated_images
 
-    async def edit_image(self, original_image_path: str, edit_prompt: str) -> Optional[str]:
+    async def edit_image(self, original_image_path: str, edit_prompt: str, output_dir: str = None) -> Optional[str]:
         """
-        编辑现有图像。
-        注意：当前版本此功能为高级功能，实现为占位符。
-        需要一个将本地图片上传到可访问URL的机制。
+        编辑现有图像，支持base64上传。
 
         Args:
             original_image_path: 本地原始图像的路径。
             edit_prompt: 编辑指令。
+            output_dir: 输出目录，如果为None则使用默认临时目录。
 
         Returns:
-            编辑后图像的URL或本地路径。
+            编辑后图像的本地路径。
         """
         if not volc_service.is_available():
             logger.error("图像编辑失败，因为火山引擎服务不可用。")
             return None
 
         logger.info(f"准备使用 {EDIT_MODEL} 编辑图像: {original_image_path}...")
-        
-        # TODO: 实现将本地文件上传到云存储或临时服务器，以获得一个公开的URL
-        # 这是因为图生图模型通常需要一个URL作为输入。
-        image_url_for_editing = "https://example.com/placeholder.png" # 这是一个占位符URL
-        logger.warning("图像编辑功能需要一个将本地图片转换为URL的机制，当前使用占位符URL。")
 
-        edited_image_url = volc_service.image_to_image(
-            model=EDIT_MODEL,
-            prompt=edit_prompt,
-            image_url=image_url_for_editing
-        )
+        try:
+            from ..utils.image_utils import encode_file_to_base64, download_image_from_url
+            import time
+            import os
 
-        if edited_image_url:
-            logger.info("图像编辑成功！")
-            # TODO: 将编辑后的图片下载回本地
-            return edited_image_url
-        else:
-            logger.error("图像编辑失败。")
+            # 将本地图片编码为base64
+            base64_image = encode_file_to_base64(original_image_path)
+            logger.info(f"图片已编码为base64，长度: {len(base64_image)}")
+
+            # 使用AI服务进行图生图
+            result_url = await volc_service.edit_image_with_base64(
+                prompt=edit_prompt,
+                base64_image=base64_image,
+                model_preference=EDIT_MODEL
+            )
+
+            if result_url and not result_url.startswith("placeholder://"):
+                # 下载编辑后的图片到本地
+                if output_dir is None:
+                    output_dir = f"{os.path.dirname(original_image_path)}"
+
+                filename = f"edited_{int(time.time())}.png"
+                output_path = f"{output_dir}/{filename}"
+
+                try:
+                    local_path = await download_image_from_url(result_url, output_path)
+                    logger.info(f"图像编辑成功！编辑后的图片已保存到: {local_path}")
+                    return local_path
+                except Exception as e:
+                    logger.error(f"下载编辑后的图片失败: {e}")
+                    return result_url  # 返回URL作为备选
+            else:
+                logger.error(f"图像编辑失败，AI服务返回: {result_url}")
+                return None
+
+        except Exception as e:
+            logger.error(f"图像编辑过程出现异常: {e}")
             return None
 
 # 创建一个单例

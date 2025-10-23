@@ -15,6 +15,7 @@ from datetime import datetime
 
 from ..services.ai_service import AIService
 from ..services.file_system import ProjectFileSystem
+from ..config import settings
 from ..utils.image_utils import (
     encode_file_to_base64,
     encode_file,
@@ -56,7 +57,7 @@ async def upload_image_base64(
             raise HTTPException(status_code=400, detail="请上传图片文件")
 
         # 保存临时文件
-        temp_dir = "temp/uploads"
+        temp_dir = str(settings.TEMP_DIR / "uploads")
         os.makedirs(temp_dir, exist_ok=True)
         temp_path = os.path.join(temp_dir, file.filename)
 
@@ -166,7 +167,7 @@ async def edit_uploaded_image(
             raise HTTPException(status_code=400, detail="请上传图片文件")
 
         # 保存临时文件
-        temp_dir = "temp/uploads"
+        temp_dir = str(settings.TEMP_DIR / "uploads")
         os.makedirs(temp_dir, exist_ok=True)
 
         # 处理主图像
@@ -370,7 +371,7 @@ async def image_to_image_generation(
             raise HTTPException(status_code=400, detail="请上传图片文件")
 
         # 保存临时文件
-        temp_dir = "temp/uploads"
+        temp_dir = str(settings.TEMP_DIR / "uploads")
         os.makedirs(temp_dir, exist_ok=True)
         temp_path = os.path.join(temp_dir, file.filename)
 
@@ -429,7 +430,7 @@ async def list_temp_files():
     List files in temp/images directory
     """
     try:
-        temp_dir = "backend/temp/images"
+        temp_dir = str(settings.TEMP_UPLOADS_DIR)
         if not os.path.exists(temp_dir):
             return {"success": True, "files": [], "total_count": 0}
 
@@ -465,7 +466,7 @@ async def delete_temp_file(filename: str):
     Delete specific file in temp/images directory
     """
     try:
-        file_path = os.path.join("backend/temp/images", filename)
+        file_path = str(settings.TEMP_UPLOADS_DIR / filename)
 
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="文件不存在")

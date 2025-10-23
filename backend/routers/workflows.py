@@ -11,19 +11,79 @@ from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 import logging
 
-from ..workflows.text_compression import TextCompressionWorkflow
-from ..workflows.feedback_handler import FeedbackWorkflow
-from ..services.hybrid_orchestrator import hybrid_orchestrator
-from ..services.batch_processor import batch_processor
-
 logger = logging.getLogger(__name__)
+
+# 尝试导入依赖的工作流模块，失败则降级
+try:
+    from ..workflows.text_compression import TextCompressionWorkflow
+    from ..workflows.feedback_handler import FeedbackWorkflow
+    WORKFLOWS_AVAILABLE = True
+except Exception as e:
+    WORKFLOWS_AVAILABLE = False
+    TextCompressionWorkflow = None
+    FeedbackWorkflow = None
+    logger.warning(f"工作流模块不可用，已降级加载：{e}")
+
+# 尝试导入混合编排器，失败则降级
+try:
+    from ..services.hybrid_orchestrator import hybrid_orchestrator
+    HYBRID_AVAILABLE = True
+except Exception as e:
+    HYBRID_AVAILABLE = False
+    hybrid_orchestrator = None
+    logger.warning(f"混合编排器不可用，相关接口将返回 503：{e}")
+
+# 批处理器始终尝试导入（该模块内部已做动态依赖处理）
+from ..services.batch_processor import batch_processor
 
 # 创建路由器
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
-# 全局工作流实例
-text_compression_workflow = TextCompressionWorkflow()
-feedback_workflow = FeedbackWorkflow()
+# 全局工作流实例（若依赖不可用则为 None）
+text_compression_workflow = TextCompressionWorkflow() if WORKFLOWS_AVAILABLE else None
+feedback_workflow = FeedbackWorkflow() if WORKFLOWS_AVAILABLE else None
+
+# 添加按需初始化方法，避免因早期导入失败导致的永久不可用标志
+def ensure_workflows_initialized() -> bool:
+    """按需导入并初始化工作流模块与实例"""
+    global WORKFLOWS_AVAILABLE, TextCompressionWorkflow, FeedbackWorkflow, text_compression_workflow, feedback_workflow
+    if WORKFLOWS_AVAILABLE and text_compression_workflow and feedback_workflow:
+        return True
+    try:
+        if TextCompressionWorkflow is None or FeedbackWorkflow is None:
+            from ..workflows.text_compression import TextCompressionWorkflow as _TCW
+            from ..workflows.feedback_handler import FeedbackWorkflow as _FW
+            TextCompressionWorkflow = _TCW
+            FeedbackWorkflow = _FW
+        if text_compression_workflow is None:
+            text_compression_workflow = TextCompressionWorkflow()
+        if feedback_workflow is None:
+            feedback_workflow = FeedbackWorkflow()
+        WORKFLOWS_AVAILABLE = True
+        return True
+    except Exception as e:
+        logger.warning(f"工作流模块初始化失败：{e}")
+        WORKFLOWS_AVAILABLE = False
+        text_compression_workflow = None
+        feedback_workflow = None
+        return False
+
+
+def ensure_hybrid_initialized() -> bool:
+    """按需导入并初始化混合编排器"""
+    global HYBRID_AVAILABLE, hybrid_orchestrator
+    if HYBRID_AVAILABLE and hybrid_orchestrator is not None:
+        return True
+    try:
+        from ..services.hybrid_orchestrator import hybrid_orchestrator as _HO
+        hybrid_orchestrator = _HO
+        HYBRID_AVAILABLE = True
+        return True
+    except Exception as e:
+        logger.warning(f"混合编排器初始化失败：{e}")
+        HYBRID_AVAILABLE = False
+        hybrid_orchestrator = None
+        return False
 
 
 class TextCompressionRequest(BaseModel):
@@ -62,6 +122,10 @@ async def start_text_compression(request: TextCompressionRequest):
     Start text compression workflow
     """
     try:
+        ensure_workflows_initialized()
+        if not WORKFLOWS_AVAILABLE or text_compression_workflow is None:
+            raise HTTPException(status_code=503, detail="文本压缩工作流不可用：依赖未安装或初始化失败")
+
         if not request.text or len(request.text.strip()) < 100:
             raise HTTPException(status_code=400, detail="文本长度至少需要100个字符")
 
@@ -84,6 +148,8 @@ async def start_text_compression(request: TextCompressionRequest):
             "compression_history": result.get("compression_history", [])
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文本压缩工作流启动失败: {e}")
         raise HTTPException(status_code=500, detail=f"文本压缩失败: {str(e)}")
@@ -96,6 +162,10 @@ async def handle_feedback(request: FeedbackRequest):
     Handle user feedback
     """
     try:
+        ensure_workflows_initialized()
+        if not WORKFLOWS_AVAILABLE or feedback_workflow is None:
+            raise HTTPException(status_code=503, detail="反馈处理工作流不可用：依赖未安装或初始化失败")
+
         if not request.feedback_text or len(request.feedback_text.strip()) < 10:
             raise HTTPException(status_code=400, detail="反馈内容至少需要10个字符")
 
@@ -119,6 +189,8 @@ async def handle_feedback(request: FeedbackRequest):
             "final_result": result.get("final_result")
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"反馈处理失败: {e}")
         raise HTTPException(status_code=500, detail=f"反馈处理失败: {str(e)}")
@@ -224,8 +296,7 @@ async def cancel_batch_job(job_id: str):
 
         return {
             "success": True,
-            "message": "作业已取消",
-            "job_id": job_id
+            "message": "作业已取消"
         }
 
     except HTTPException:
@@ -242,6 +313,10 @@ async def start_comic_generation(request: ComicGenerationRequest, background_tas
     Start complete comic generation pipeline
     """
     try:
+        ensure_hybrid_initialized()
+        if not HYBRID_AVAILABLE or hybrid_orchestrator is None:
+            raise HTTPException(status_code=503, detail="漫画生成流水线不可用：依赖未安装或初始化失败")
+
         if not request.novel_text or len(request.novel_text.strip()) < 500:
             raise HTTPException(status_code=400, detail="小说文本至少需要500个字符")
 
@@ -266,6 +341,8 @@ async def start_comic_generation(request: ComicGenerationRequest, background_tas
             "options": request.options or {}
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"启动漫画生成流水线失败: {e}")
         raise HTTPException(status_code=500, detail=f"启动生成失败: {str(e)}")
@@ -278,6 +355,10 @@ async def handle_project_feedback(project_name: str, request: FeedbackRequest):
     Handle project-related user feedback
     """
     try:
+        ensure_hybrid_initialized()
+        if not HYBRID_AVAILABLE or hybrid_orchestrator is None:
+            raise HTTPException(status_code=503, detail="反馈接口不可用：依赖未安装或初始化失败")
+
         if not request.feedback_text or len(request.feedback_text.strip()) < 10:
             raise HTTPException(status_code=400, detail="反馈内容至少需要10个字符")
 
@@ -293,6 +374,8 @@ async def handle_project_feedback(project_name: str, request: FeedbackRequest):
             "feedback_result": result
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"处理项目反馈失败: {e}")
         raise HTTPException(status_code=500, detail=f"处理反馈失败: {str(e)}")
@@ -305,6 +388,10 @@ async def get_workflows_status():
     Get all workflows status
     """
     try:
+        # 动态确认可用性
+        ensure_workflows_initialized()
+        ensure_hybrid_initialized()
+
         # 获取活跃的批处理作业
         active_jobs = {}
         for job_id, job in batch_processor.active_jobs.items():
@@ -321,7 +408,9 @@ async def get_workflows_status():
             "success": True,
             "active_batch_jobs": active_jobs,
             "total_active_jobs": len(active_jobs),
-            "system_status": "healthy"
+            "system_status": "healthy",
+            "workflows_available": WORKFLOWS_AVAILABLE,
+            "hybrid_available": HYBRID_AVAILABLE
         }
 
     except Exception as e:
@@ -355,6 +444,10 @@ async def get_system_health():
     Get system health status
     """
     try:
+        # 动态确认可用性
+        ensure_workflows_initialized()
+        ensure_hybrid_initialized()
+
         # 统计活跃作业
         total_active_jobs = len(batch_processor.active_jobs)
         running_jobs = sum(1 for job in batch_processor.active_jobs.values() if job.status.value == "running")
@@ -372,7 +465,9 @@ async def get_system_health():
             },
             "available_task_handlers": list(batch_processor.task_handlers.keys()),
             "max_workers": batch_processor.max_workers,
-            "timestamp": "2024-01-01T00:00:00Z"  # 简化时间戳
+            "workflows_available": WORKFLOWS_AVAILABLE,
+            "hybrid_available": HYBRID_AVAILABLE,
+            "timestamp": "2024-01-01T00:00:00Z"
         }
 
     except Exception as e:

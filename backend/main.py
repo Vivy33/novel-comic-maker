@@ -9,6 +9,11 @@ from contextlib import asynccontextmanager
 import logging
 import sys
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # 配置日志
 logging.basicConfig(
@@ -38,11 +43,41 @@ app = FastAPI(
 # 配置CORS中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== 注册API路由 =====
+from .routers.projects import router as projects_router
+from .routers.comics import router as comics_router
+from .routers.characters import router as characters_router
+from .routers.image_edit import router as image_edit_router
+try:
+    from .routers.workflows import router as workflows_router
+except Exception:
+    workflows_router = None
+try:
+    from .routers.text2image import router as text2image_router
+except Exception:
+    text2image_router = None
+try:
+    from .routers.context_management import router as context_router
+except Exception:
+    context_router = None
+
+# 将路由挂载到应用
+app.include_router(projects_router)
+app.include_router(comics_router)
+app.include_router(characters_router)
+app.include_router(image_edit_router)
+if workflows_router:
+    app.include_router(workflows_router)
+if text2image_router:
+    app.include_router(text2image_router)
+if context_router:
+    app.include_router(context_router)
 
 
 # TODO: [VULTURE] Flagged as unused. User wants to keep for now, but consider for future removal.
@@ -83,8 +118,15 @@ async def test_basic():
 async def test_status():
     """测试系统状态"""
     try:
-        # 检查项目目录结构
-        required_dirs = ["agents", "models", "routers", "services", "workflows", "utils"]
+        # 检查项目目录结构（backend 下）
+        required_dirs = [
+            "backend/agents",
+            "backend/models",
+            "backend/routers",
+            "backend/services",
+            "backend/workflows",
+            "backend/utils"
+        ]
         dir_status = {}
 
         for dir_name in required_dirs:
@@ -96,10 +138,10 @@ async def test_status():
 
         # 检查核心文件
         core_files = [
-            "main.py",
-            "test_phase1_features.py",
-            "test_phase2_features.py",
-            "requirements.txt"
+            "backend/main.py",
+            "test/test_phase1_features.py",
+            "test/test_phase2_features.py",
+            "backend/requirements.txt"
         ]
 
         file_status = {}

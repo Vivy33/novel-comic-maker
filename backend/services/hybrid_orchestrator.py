@@ -132,7 +132,7 @@ class HybridOrchestrator:
         logger.info("文本预处理...")
 
         # 保存原始文本
-        await self.file_system.save_file(project_path, 'source', 'original.txt', novel_text)
+        self.file_system.save_file(project_path, 'source', 'original.txt', novel_text)
 
         # 智能分段
         segments = await self.simple_agents['text_segmenter'].segment_text(
@@ -141,7 +141,7 @@ class HybridOrchestrator:
         )
 
         # 保存分段结果
-        await self.file_system.save_file(
+        self.file_system.save_file(
             project_path, 'processing', 'segments.json', segments
         )
 
@@ -159,13 +159,13 @@ class HybridOrchestrator:
         workflow_result = await self.text_compression_workflow.run_compression(text)
 
         # 保存压缩结果
-        await self.file_system.save_file(
+        self.file_system.save_file(
             project_path, 'processing', 'compression_result.json',
             workflow_result
         )
 
         if workflow_result.get('compressed_text'):
-            await self.file_system.save_file(
+            self.file_system.save_file(
                 project_path, 'processing', 'compressed.txt',
                 workflow_result['compressed_text']
             )
@@ -180,7 +180,7 @@ class HybridOrchestrator:
         analysis_result = await text_analyzer.analyze(text)
 
         # 保存分析结果
-        await self.file_system.save_file(
+        self.file_system.save_file(
             project_path, 'processing', 'text_analysis.json',
             analysis_result
         )
@@ -199,7 +199,7 @@ class HybridOrchestrator:
         comic_script = await script_generator.generate(text_analysis)
 
         # 保存脚本
-        await self.file_system.save_file(
+        self.file_system.save_file(
             project_path, 'chapters', 'comic_script.json',
             comic_script
         )
@@ -298,7 +298,7 @@ class HybridOrchestrator:
             # 这里应该实现从URL下载图像的逻辑
             # 简化版本：直接返回路径
             output_path = f"{project_path}/output/{filename}"
-            await self.file_system.save_file(project_path, 'output', filename, f"Image URL: {image_url}")
+            self.file_system.save_file(project_path, 'output', filename, f"Image URL: {image_url}")
             return output_path
         except Exception as e:
             logger.error(f"保存图像失败: {e}")
@@ -381,7 +381,7 @@ class HybridOrchestrator:
             )
 
             # 保存反馈结果
-            await self.file_system.save_file(
+            self.file_system.save_file(
                 project_path, 'processing', f'feedback_{feedback_result["workflow_id"]}.json',
                 feedback_result
             )

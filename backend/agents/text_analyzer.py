@@ -8,19 +8,84 @@ import json
 import logging
 from typing import Dict, Any, List
 
-from ..services.ai_service import volc_service
+from ..services.ai_service import volc_service, AIService
 
 logger = logging.getLogger(__name__)
 
 # 定义模型端点
-LITE_MODEL = "doubao-lite-32k"
-FLASH_MODEL = "doubao-flash-128k"
+LITE_MODEL = "doubao-seed-1-6-flash-250828"
+FLASH_MODEL = "doubao-seed-1-6-flash-250828"
 
 class TextAnalyzer:
     """
     分析小说文本，提取结构化信息。
     编排 lite 和 flash 模型以实现高效、深入的分析。
+    使用JSON Schema确保输出格式的标准化。
     """
+
+    def __init__(self):
+        self.ai_service = AIService()
+
+    def _get_chunk_analysis_schema(self) -> Dict[str, Any]:
+        """获取块分析的JSON Schema"""
+        return {
+            "type": "object",
+            "properties": {
+                "characters": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "文本中出现的角色列表"
+                },
+                "setting": {
+                    "type": "string",
+                    "description": "场景或环境的简要描述"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "文本情节的简要概括"
+                }
+            },
+            "required": ["characters", "setting", "summary"]
+        }
+
+    def _get_final_analysis_schema(self) -> Dict[str, Any]:
+        """获取最终分析的JSON Schema"""
+        return {
+            "type": "object",
+            "properties": {
+                "main_characters": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string"}
+                        },
+                        "required": ["name", "description"]
+                    },
+                    "description": "主要角色列表"
+                },
+                "settings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "故事发生的主要场景和环境"
+                },
+                "plot_summary": {
+                    "type": "string",
+                    "description": "连贯、完整的故事情节摘要"
+                },
+                "emotional_flow": {
+                    "type": "string",
+                    "description": "整个故事中的情感变化流动"
+                },
+                "key_events": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "关键的情节转折点或重要事件"
+                }
+            },
+            "required": ["main_characters", "settings", "plot_summary", "emotional_flow", "key_events"]
+        }
 
     def _split_text(self, text: str, chunk_size: int = 1000) -> List[str]:
         """简单的按字符数分割文本"""
@@ -53,61 +118,80 @@ class TextAnalyzer:
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
             logger.info(f"使用 {LITE_MODEL} 分析块 {i+1}/{len(chunks)}...")
-            prompt = f"""你是一位专业的小说分析助手。请阅读以下小说文本，并以JSON格式提取其核心内容。
-            请提取以下信息：
-            1. `characters`: 文本中出现的角色列表。
-            2. `setting`: 场景或环境的简要描述。
-            3. `summary`: 文本情节的简要概括。
+            prompt = f"""请阅读以下小说文本，提取其核心内容：
 
             小说文本片段：
             ---
             {chunk}
             ---
 
-            请严格按照JSON格式返回。"""
-            
-            messages = [{"role": "user", "content": prompt}]
-            summary_str = volc_service.chat_completion(LITE_MODEL, messages)
-            
-            if summary_str:
-                try:
+            请提取角色列表、场景描述和情节概括。"""
+
+            # 使用JSON Schema强制输出格式
+            try:
+                summary_str = volc_service.chat_completion(
+                    model=LITE_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format=self.ai_service.create_json_schema_response_format(
+                        self._get_chunk_analysis_schema()
+                    )
+                )
+
+                if summary_str:
                     chunk_summaries.append(json.loads(summary_str))
-                except json.JSONDecodeError:
-                    logger.warning(f"块 {i+1} 的分析结果不是有效的JSON，将作为纯文本处理。")
-                    chunk_summaries.append({"summary": summary_str}) # Fallback handling
+                else:
+                    logger.warning(f"块 {i+1} 的分析结果为空")
+                    chunk_summaries.append({"characters": [], "setting": "未识别", "summary": chunk[:100]})
+            except Exception as e:
+                logger.error(f"块 {i+1} JSON Schema分析失败: {e}")
+                # 降级处理：使用传统方式
+                summary_str = volc_service.chat_completion(LITE_MODEL, [{"role": "user", "content": prompt}])
+                if summary_str:
+                    try:
+                        chunk_summaries.append(json.loads(summary_str))
+                    except json.JSONDecodeError:
+                        chunk_summaries.append({"characters": [], "setting": "未识别", "summary": chunk[:100]})
+                else:
+                    chunk_summaries.append({"characters": [], "setting": "未识别", "summary": chunk[:100]})
 
         # 3. 使用 flash 模型进行最终的综合分析
         logger.info(f"使用 {FLASH_MODEL} 进行综合分析...")
         combined_summaries = "\n".join([f"片段 {i+1}:\n{json.dumps(s, ensure_ascii=False)}\n" for i, s in enumerate(chunk_summaries)])
 
-        final_prompt = f"""你是一位资深的小说编辑。你收到了关于一部小说连续片段的初步分析报告。
-        请整合这些报告，生成一份全面、连贯的全局分析报告。
-
-        你的任务是：
-        1. `main_characters`: 识别并列出主要角色，为每个角色写一句描述。
-        2. `settings`: 描述故事发生的主要场景和环境。
-        3. `plot_summary`: 创建一个连贯、完整的故事情节摘要。
-        4. `emotional_flow`: 描述整个故事中的情感变化流动。
-        5. `key_events`: 识别出几个关键的情节转折点或重要事件。
+        final_prompt = f"""你是一位资深的小说编辑。请整合以下初步分析报告，生成一份全面、连贯的全局分析报告。
 
         初步分析报告如下：
         ---
         {combined_summaries}
         ---
 
-        请以JSON格式返回最终的分析报告。"""
+        请识别主要角色、场景环境、情节摘要、情感流动和关键事件。"""
 
-        messages = [{"role": "user", "content": final_prompt}]
-        final_analysis_str = volc_service.chat_completion(FLASH_MODEL, messages)
-
-        if not final_analysis_str:
-            return {"error": "Failed to get final analysis from the model."}
-
+        # 使用JSON Schema强制输出格式
         try:
+            final_analysis_str = volc_service.chat_completion(
+                model=FLASH_MODEL,
+                messages=[{"role": "user", "content": final_prompt}],
+                response_format=self.ai_service.create_json_schema_response_format(
+                    self._get_final_analysis_schema()
+                )
+            )
+
+            if not final_analysis_str:
+                return {"error": "Failed to get final analysis from the model."}
+
             return json.loads(final_analysis_str)
-        except json.JSONDecodeError:
-            logger.error("最终分析结果不是有效的JSON。")
-            return {"error": "Final analysis is not valid JSON.", "raw_output": final_analysis_str}
+        except Exception as e:
+            logger.error(f"最终分析JSON Schema失败: {e}")
+            # 降级处理：使用传统方式
+            final_analysis_str = volc_service.chat_completion(FLASH_MODEL, [{"role": "user", "content": final_prompt}])
+            if not final_analysis_str:
+                return {"error": "Failed to get final analysis from the model."}
+            try:
+                return json.loads(final_analysis_str)
+            except json.JSONDecodeError:
+                logger.error("最终分析结果不是有效的JSON。")
+                return {"error": "Final analysis is not valid JSON.", "raw_output": final_analysis_str}
 
 # 创建一个单例
 text_analyzer = TextAnalyzer()

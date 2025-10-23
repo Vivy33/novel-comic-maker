@@ -13,12 +13,12 @@ from datetime import datetime
 from typing import Dict
 import logging
 
-from services.file_system import ProjectFileSystem
-from services.ai_service import AIService
-from agents.text_analyzer import TextAnalyzer
-from agents.script_generator import ScriptGenerator
-from agents.image_generator import ImageGenerator
-from models.comic import TaskStatus, GenerationConfig
+from .file_system import ProjectFileSystem
+from .ai_service import AIService
+from ..agents.text_analyzer import TextAnalyzer
+from ..agents.script_generator import ScriptGenerator
+from ..agents.image_generator import ImageGenerator
+from ..models.comic import TaskStatus, GenerationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,9 @@ class ComicService:
     def __init__(self):
         self.file_system = ProjectFileSystem()
         self.ai_service = AIService()
-        self.text_analyzer = TextAnalyzer(self.ai_service)
-        self.script_generator = ScriptGenerator(self.ai_service)
-        self.image_generator = ImageGenerator(self.ai_service)
+        self.text_analyzer = TextAnalyzer()
+        self.script_generator = ScriptGenerator()
+        self.image_generator = ImageGenerator()
         self.active_tasks: Dict[str, TaskStatus] = {}
         logger.info("漫画服务初始化完成（包含AI Agent）")
 
@@ -165,7 +165,7 @@ class ComicService:
             self._update_task_status(task_id, "running", 10.0, "分析小说文本")
 
             # 使用AI文本分析器
-            text_analysis_result = await self.text_analyzer.analyze_text(novel_text)
+            text_analysis_result = await self.text_analyzer.analyze(novel_text)
 
             # 保存文本分析结果
             self.file_system.save_processing_result(
@@ -183,7 +183,7 @@ class ComicService:
             self._update_task_status(task_id, "running", 35.0, "分段文本，准备生成脚本")
 
             # 将文本分为逻辑段落作为章节
-            text_segments = self.text_analyzer._segment_text(novel_text, 5000)  # 每段5000字符
+            text_segments = self.text_analyzer._split_text(novel_text, 5000)  # 每段5000字符
             chapters = []
 
             for i, segment in enumerate(text_segments):
@@ -196,9 +196,7 @@ class ComicService:
                     f"生成第 {i+1}/{len(text_segments)} 章节脚本"
                 )
 
-                script_result = await self.script_generator.generate_script(
-                    text_analysis_result, segment, chapter_id, config.panels_per_chapter
-                )
+                script_result = await self.script_generator.generate(text_analysis_result)
 
                 # 保存脚本
                 self.file_system.save_processing_result(
@@ -226,8 +224,8 @@ class ComicService:
                 )
 
                 # 使用AI图像生成器
-                generated_images = await self.image_generator.generate_chapter_images(
-                    script, characters, config.style, config.quality
+                generated_images = await self.image_generator.generate_images_for_script(
+                    script, str(self.file_system.projects_dir / project_path)
                 )
 
                 # 保存完整的漫画数据
@@ -248,7 +246,7 @@ class ComicService:
             # 更新项目状态
             self.file_system.update_project_status(
                 project_path, "completed", "comic_generated",
-                total_chapters=len(text_analysis_result["chapters"])
+                total_chapters=len(chapters)
             )
 
             logger.info(f"漫画生成任务完成: {task_id}")

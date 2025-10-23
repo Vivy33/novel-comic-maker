@@ -10,8 +10,9 @@ import base64
 import mimetypes
 import httpx
 import hashlib
+import time
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,27 @@ def encode_file_to_base64(file_path: str) -> str:
     except Exception as e:
         logger.error(f"文件编码失败: {file_path}, 错误: {e}")
         raise
+
+
+def encode_file(file_path: str) -> str:
+    """
+    将本地文件编码为base64格式 - 简化版本，按照用户提供格式
+
+    格式为 data:{mime_type};base64,{base64_data}
+
+    Args:
+        file_path: 本地文件路径
+
+    Returns:
+        base64编码字符串
+
+    Raises:
+        FileNotFoundError: 文件不存在
+    """
+    mime_type, _ = mimetypes.guess_type(file_path)
+    with open(file_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+    return f"data:{mime_type};base64,{encoded_string}"
 
 
 def decode_base64_to_file(base64_data: str, output_path: str) -> str:
@@ -157,7 +179,7 @@ async def download_image_from_url(
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
 
         # 下载文件
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             response = await client.get(image_url)
             response.raise_for_status()
 
@@ -175,6 +197,31 @@ async def download_image_from_url(
     except Exception as e:
         logger.error(f"保存图像失败 {save_path}: {e}")
         raise
+
+
+async def download_to_temp_images(image_url: str, filename: Optional[str] = None) -> str:
+    """
+    下载图像到 backend/temp/images/ 目录
+
+    Args:
+        image_url: 图像URL
+        filename: 可选的文件名，如果不提供则自动生成
+
+    Returns:
+        下载的文件路径
+    """
+    temp_dir = Path(__file__).parent.parent / "temp" / "images"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    if not filename:
+        # 生成基于时间戳的唯一文件名
+        timestamp = int(time.time())
+        hash_suffix = hashlib.md5(image_url.encode()).hexdigest()[:8]
+        filename = f"download_{timestamp}_{hash_suffix}.png"
+
+    save_path = temp_dir / filename
+
+    return await download_image_from_url(image_url, str(save_path))
 
 
 def generate_unique_filename(original_path: str, suffix: str = "") -> str:

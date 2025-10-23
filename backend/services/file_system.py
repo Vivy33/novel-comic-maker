@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 
-from config import settings
+try:
+    from ..config import settings
+except Exception:
+    from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,7 @@ class ProjectFileSystem:
     """
 
     def __init__(self, projects_dir: Optional[str] = None):
-        self.projects_dir = Path(projects_dir or settings.projects_dir)
+        self.projects_dir = Path(projects_dir) if projects_dir else settings.PROJECTS_DIR
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"项目文件系统初始化完成，根目录: {self.projects_dir}")
 
@@ -89,6 +92,86 @@ class ProjectFileSystem:
 
         logger.info(f"项目创建成功: {project_dir}")
         return str(project_dir)
+
+    def _resolve_project_path(self, project_identifier: str) -> Path:
+        """
+        通过项目名或完整路径解析项目目录。
+        - 如果传入的是绝对/相对路径且存在，则直接使用
+        - 否则在 projects_dir 下匹配：目录名等于 identifier 或以 "_<name>" 结尾
+        """
+        candidate = Path(project_identifier)
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+        matched = []
+        for d in self.projects_dir.iterdir():
+            if d.is_dir():
+                # 同时支持传入 project_id（完整目录名）与项目名（后缀匹配）
+                if d.name == project_identifier or d.name.endswith(f"_{project_identifier}"):
+                    matched.append(d)
+        if not matched:
+            raise FileNotFoundError(f"未找到项目: {project_identifier}")
+        matched.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return matched[0]
+
+    def save_file(self, project_identifier: str, subdir: str, filename: str, data: Any) -> str:
+        """
+        保存任意数据到项目子目录文件。
+        - data 为 dict/list 时保存为 JSON
+        - data 为 str 时保存为文本
+        - 其他类型将转换为字符串保存
+        返回保存的文件路径字符串
+        """
+        project_dir = self._resolve_project_path(project_identifier)
+        target_dir = project_dir / subdir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        file_path = target_dir / filename
+
+        try:
+            if isinstance(data, (dict, list)) and filename.lower().endswith(".json"):
+                self._save_json(file_path, data)  # type: ignore[arg-type]
+            elif isinstance(data, str):
+                file_path.write_text(data, encoding="utf-8")
+            else:
+                file_path.write_text(str(data), encoding="utf-8")
+        except Exception as e:
+            logger.error(f"保存文件失败 {file_path}: {e}")
+            raise
+
+        # 记录历史
+        try:
+            self._save_history(str(project_dir), "file_saved", {
+                "subdir": subdir,
+                "filename": filename,
+                "size": file_path.stat().st_size if file_path.exists() else 0
+            })
+        except Exception as e:
+            logger.warning(f"保存历史失败: {e}")
+
+        return str(file_path)
+
+    def save_history(self, project_identifier: str, history_type: str, data: Dict[str, Any]):
+        """对外暴露的保存历史方法，兼容测试脚本调用。"""
+        project_dir = self._resolve_project_path(project_identifier)
+        self._save_history(str(project_dir), history_type, data)
+
+    def get_project_timeline(self, project_identifier: str) -> List[Dict[str, Any]]:
+        """
+        获取项目完整时间线（兼容项目名或路径）
+        """
+        project_dir = self._resolve_project_path(project_identifier)
+        processing_dir = project_dir / "processing"
+
+        timeline: List[Dict[str, Any]] = []
+        for history_file in processing_dir.glob("*.history"):
+            try:
+                history_data = self._load_json(history_file)
+                if isinstance(history_data, list):
+                    timeline.extend(history_data)
+            except Exception as e:
+                logger.warning(f"读取历史文件失败 {history_file}: {e}")
+
+        timeline.sort(key=lambda x: x.get("timestamp", ""))
+        return timeline
 
     def get_project_info(self, project_path: str) -> Dict[str, Any]:
         """
@@ -248,35 +331,6 @@ class ProjectFileSystem:
 
         logger.info(f"章节漫画已保存: {chapter_id}")
 
-    def get_project_timeline(self, project_path: str) -> List[Dict[str, Any]]:
-        """
-        获取项目完整时间线
-
-        Args:
-            project_path: 项目路径
-
-        Returns:
-            按时间排序的历史记录列表
-        """
-        project_dir = Path(project_path)
-        processing_dir = project_dir / "processing"
-
-        timeline = []
-
-        # 扫描所有.history文件
-        for history_file in processing_dir.glob("*.history"):
-            try:
-                history_data = self._load_json(history_file)
-                if isinstance(history_data, list):
-                    timeline.extend(history_data)
-            except Exception as e:
-                logger.warning(f"读取历史文件失败 {history_file}: {e}")
-
-        # 按时间戳排序
-        timeline.sort(key=lambda x: x.get("timestamp", ""))
-
-        return timeline
-
     def list_projects(self) -> List[Dict[str, Any]]:
         """
         列出所有项目
@@ -301,6 +355,57 @@ class ProjectFileSystem:
         projects.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
         return projects
+
+    def list_chapters(self, project_identifier: str) -> List[str]:
+        """
+        列出项目的章节ID列表（目录名）。
+        """
+        project_dir = self._resolve_project_path(project_identifier)
+        chapters_dir = project_dir / "chapters"
+        if not chapters_dir.exists():
+            return []
+        chapter_ids: List[str] = []
+        for d in chapters_dir.iterdir():
+            if d.is_dir():
+                chapter_ids.append(d.name)
+        # 章节按名称排序（chapter_001, chapter_002 ...）
+        try:
+            chapter_ids.sort(key=lambda x: int(x.split("_")[-1]))
+        except Exception:
+            chapter_ids.sort()
+        return chapter_ids
+
+    def get_chapter_comic(self, project_identifier: str, chapter_id: str) -> Dict[str, Any]:
+        """
+        获取指定章节的漫画数据（读取 chapters/<chapter_id>/comic.json）。
+        若不存在，则尝试根据脚本与图像目录生成基础结构。
+        """
+        project_dir = self._resolve_project_path(project_identifier)
+        chapter_dir = project_dir / "chapters" / chapter_id
+        if not chapter_dir.exists():
+            raise FileNotFoundError(f"章节目录不存在: {chapter_dir}")
+        comic_file = chapter_dir / "comic.json"
+        if comic_file.exists():
+            return self._load_json(comic_file)
+        # 回退：拼装最简结构
+        script_file = chapter_dir / "script.json"
+        script: Dict[str, Any] = {}
+        if script_file.exists():
+            try:
+                script = self._load_json(script_file)
+            except Exception:
+                script = {}
+        images_dir = chapter_dir / "images"
+        images: List[Dict[str, Any]] = []
+        if images_dir.exists():
+            for p in sorted(images_dir.glob("*.png")):
+                images.append({"image_path": str(p)})
+        return {
+            "chapter_id": chapter_id,
+            "script": script,
+            "images": images,
+            "created_at": datetime.now().isoformat()
+        }
 
     def _save_history(self, project_path: str, history_type: str, data: Dict[str, Any]):
         """

@@ -43,9 +43,14 @@ class ImageGenerator:
             fs = ProjectFileSystem()
             character_info = {}
 
-            # 获取项目角色列表
-            project_id = os.path.basename(project_path)
-            characters = fs.get_project_characters(project_path)
+            # 获取项目角色列表 - 使用正确的方法
+            try:
+                # 使用正确的方法名
+                characters = fs.get_project_characters(project_id)
+            except AttributeError:
+                # 如果方法不存在，使用备用方案
+                logger.warning(f"get_project_characters方法不存在，跳过角色参考信息获取")
+                characters = []
 
             for character in characters:
                 if character.get("name") in selected_characters:
@@ -114,25 +119,75 @@ class ImageGenerator:
 
             # 处理项目相对路径 (如 /projects/2025.10.25_11.48_勇者斗恶龙/...)
             image_path = None
+            logger.info(f"开始处理前情提要图片路径: {previous_context}")
+
             if previous_context.startswith("/projects/"):
                 # 将项目相对路径转换为绝对路径
                 # 格式: /projects/项目名/子路径 -> 当前工作目录/projects/项目名/子路径
                 relative_path = previous_context[1:]  # 去掉开头的 /
                 image_path = os.path.join(os.getcwd(), relative_path)
-                logger.info(f"转换项目相对路径（图片生成）: {previous_context} -> {image_path}")
+                logger.info(f"转换项目相对路径: {previous_context} -> {image_path}")
+            elif previous_context.startswith("http"):
+                # HTTP/HTTPS URL - 需要下载到本地
+                try:
+                    from utils.image_utils import download_image_from_url
+                    import tempfile
+                    import uuid
+
+                    # 创建临时文件
+                    temp_filename = f"reference_{uuid.uuid4().hex[:8]}.png"
+                    temp_dir = tempfile.gettempdir()
+                    temp_path = os.path.join(temp_dir, temp_filename)
+
+                    # 下载图片
+                    logger.info(f"下载前情提要图片到本地: {previous_context}")
+                    downloaded_path = await download_image_from_url(previous_context, temp_path)
+                    if downloaded_path and os.path.isfile(downloaded_path):
+                        image_path = downloaded_path
+                        logger.info(f"前情提要图片下载成功: {image_path}")
+                    else:
+                        logger.warning(f"前情提要图片下载失败: {previous_context}")
+                except Exception as e:
+                    logger.error(f"下载前情提要图片时出错: {e}")
+                    image_path = None
             elif os.path.isfile(previous_context):
                 # 直接是文件系统路径
                 image_path = previous_context
-
-            if image_path and os.path.isfile(image_path):
-                reference_image_path = image_path  # 使用绝对路径
-                logger.info(f"检测到有效的前情提要图片: {reference_image_path}")
+                logger.info(f"使用直接文件路径: {image_path}")
             else:
-                logger.warning(f"前情提要图片路径无效: {previous_context}")
+                # 尝试作为相对路径处理
+                possible_path = os.path.join(os.getcwd(), previous_context)
+                if os.path.isfile(possible_path):
+                    image_path = possible_path
+                    logger.info(f"作为相对路径解析成功: {previous_context} -> {image_path}")
+
+            # 验证图片文件是否存在且可读
+            if image_path and os.path.isfile(image_path):
+                # 检查文件大小，确保不是空文件
+                file_size = os.path.getsize(image_path)
+                if file_size > 0:
+                    reference_image_path = image_path  # 使用绝对路径
+                    logger.info(f"✅ 检测到有效的前情提要图片: {reference_image_path} (大小: {file_size} bytes)")
+                else:
+                    logger.warning(f"前情提要图片文件为空: {image_path}")
+            else:
+                logger.warning(f"❌ 前情提要图片路径无效或文件不存在: {previous_context}")
+                # 列出可能的调试信息
+                if previous_context.startswith("/projects/"):
+                    project_part = previous_context.split("/")[2] if len(previous_context.split("/")) > 2 else ""
+                    if project_part:
+                        projects_dir = os.path.join(os.getcwd(), "projects")
+                        if os.path.exists(projects_dir):
+                            logger.info(f"projects目录存在: {projects_dir}")
+                            project_dir = os.path.join(projects_dir, project_part)
+                            logger.info(f"项目目录检查: {project_dir}, 存在: {os.path.exists(project_dir)}")
 
         optimized_prompt = self._optimize_scene_description(scene_description, script, project_path, reference_image_path)
 
         logger.info(f"生成场景图像，优化后prompt长度: {len(optimized_prompt)} 字符")
+
+        # 初始化有效图片URL列表
+        valid_image_urls = []
 
         try:
             # 根据是否有参考图片选择不同的生成策略
@@ -165,6 +220,9 @@ class ImageGenerator:
                     if result_url:
                         if isinstance(result_url, list):
                             result_url = result_url[0] if result_url else None
+                        # 处理API返回的字典格式
+                        if isinstance(result_url, dict):
+                            result_url = result_url.get('image_url')
                         image_urls.append(result_url)
                     else:
                         logger.warning(f"第{i+1}张图片生成失败，返回空URL")
@@ -213,6 +271,9 @@ class ImageGenerator:
                         )
 
                         if image_url_result:
+                            # 处理API返回的字典格式
+                            if isinstance(image_url_result, dict):
+                                image_url_result = image_url_result.get('image_url')
                             image_urls.append(image_url_result)
                             logger.info(f"第 {i+1} 张图像生成成功")
                         else:
@@ -324,6 +385,10 @@ class ImageGenerator:
 
                         if isinstance(variant_url, list):
                             variant_url = variant_url[0] if variant_url else None
+
+                        # 处理API返回的字典格式
+                        if isinstance(variant_url, dict):
+                            variant_url = variant_url.get('image_url')
 
                         if variant_url:
                             from utils.image_utils import download_image_from_url
@@ -446,6 +511,7 @@ class ImageGenerator:
 
             # 获取前情提要图片信息
             previous_context = script.get("previous_context", "")
+            previous_segment_text = script.get("previous_segment_text", "")  # 新增：前情提要文本
             continuity_info = ""
             reference_image_path = None
 
@@ -468,12 +534,27 @@ class ImageGenerator:
                 if image_path and os.path.isfile(image_path):
                     # 前情提要是一个有效的图片文件路径
                     reference_image_path = image_path  # 使用绝对路径
-                    continuity_info = f"保持与前情提要的剧情连贯性，严格参考上一段画面的风格、角色外观和场景布局"
-                    logger.info(f"检测到前情提要图片参考: {reference_image_path}")
+
+                    # 构建包含前情提要文本的连贯性信息
+                    if previous_segment_text:
+                        continuity_info = f"保持与前情提要的剧情连贯性：前情概述'{previous_segment_text[:150]}...'，严格参考上一段画面的风格、角色外观、表情动作和场景布局"
+                        logger.info(f"检测到前情提要图片参考和文本: {reference_image_path} + 文本:{previous_segment_text[:50]}...")
+                    else:
+                        continuity_info = f"保持与前情提要的剧情连贯性，严格参考上一段画面的风格、角色外观和场景布局"
+                        logger.info(f"检测到前情提要图片参考: {reference_image_path}")
                 else:
                     # 前情提要只是文字描述或路径无效
-                    continuity_info = f"保持与前情提要的剧情连贯性，参考上一段画面"
-                    logger.info(f"前情提要是文字描述或无效路径: {previous_context[:50]}...")
+                    if previous_segment_text:
+                        continuity_info = f"保持与前情提要的剧情连贯性：前情概述'{previous_segment_text[:150]}...'，参考上一段画面风格和角色状态"
+                        logger.info(f"前情提要是文本描述（无图片）: {previous_segment_text[:50]}...")
+                    else:
+                        continuity_info = f"保持与前情提要的剧情连贯性，参考上一段画面"
+                        logger.info(f"前情提要是文字描述或无效路径: {previous_context[:50]}...")
+            else:
+                # 没有前情提要图片，但可能有文本
+                if previous_segment_text:
+                    continuity_info = f"保持与前情提要的剧情连贯性：前情概述'{previous_segment_text[:150]}...'"
+                    logger.info(f"仅前情提要文本（无图片）: {previous_segment_text[:50]}...")
 
             # 初始化各个部分
             core_scene = []      # 核心情节描述 (用户编辑的文本)
@@ -521,8 +602,7 @@ class ImageGenerator:
                         # 如果没有角色参考信息，至少添加角色名
                         character_info.append(char_name)
 
-            # 2.1. 优化群体角色描述处理
-            character_info = self._optimize_group_character_descriptions(structured_data, character_info)
+            # 2.1. 使用text_segmenter提供的角色信息，无需额外优化
 
             # 3. 场景补充信息 - 始终使用AI分析数据来增强一致性
             if structured_data:
@@ -668,12 +748,11 @@ class ImageGenerator:
                        f"结构化数据: {'是' if structured_data else '否'}, "
                        f"场景补充: {'是' if scene_supplement else '否'}")
 
-            # 6. 角色数量约束 - 确保生成的角色数量符合原文描述
+            # 6. 添加角色和场景约束 - 使用text_segmenter的分析结果
             character_count_constraints = self._extract_character_count_constraints(core_scene, structured_data, character_info)
             if character_count_constraints:
-                # 添加数量约束到prompt中
+                # 添加约束到prompt中
                 optimized_parts.extend(character_count_constraints)
-                logger.info(f"添加角色数量约束: {character_count_constraints}")
 
             # 记录最终prompt长度和使用的策略
             logger.info(f"生成优化prompt，长度: {len(optimized_prompt)} 字符")
@@ -805,6 +884,10 @@ class ImageGenerator:
             )
 
             if edited_url:
+                # 处理API返回的字典格式
+                if isinstance(edited_url, dict):
+                    edited_url = edited_url.get('image_url')
+
                 # 下载编辑后的图像
                 try:
                     from utils.image_utils import download_image_from_url
@@ -831,83 +914,29 @@ class ImageGenerator:
 
     def _extract_character_count_constraints(self, core_scene: str, structured_data: Dict[str, Any], character_info: List[str]) -> List[str]:
         """
-        从文本和结构化数据中提取角色数量约束
-        确保AI生成的图像角色数量符合原文描述
+        从结构化数据中提取角色数量约束
+        角色识别和数量分析应该在text_segmenter中完成
         """
         constraints = []
 
         try:
-            # 1. 从核心场景文本中提取数量信息
-            if core_scene:
-                # 查找数字量词
-                import re
+            # 使用text_segmenter已经分析好的结构化数据
+            if structured_data:
+                # 从characters字段提取角色信息
+                characters = structured_data.get("characters", "")
+                if characters:
+                    constraints.append(f"场景中的角色: {characters}")
 
-                # 匹配中文数字和阿拉伯数字
-                number_patterns = [
-                    r'(\d+|\d+个|一|二|三|四|五|六|七|八|九|十|十一|十二|十三|十四|十五|十六|十七|十八|十九|二十)(个)?',
-                    r'(一个|两个|三个|四个|五个|六个|七个|八个|九个|十个|十一个|十二个)'
-                ]
+                # 从character_descriptions字段提取详细角色信息
+                character_descriptions = structured_data.get("character_descriptions", {})
+                if character_descriptions and isinstance(character_descriptions, dict):
+                    for char_name, descriptions in character_descriptions.items():
+                        if descriptions and isinstance(descriptions, list):
+                            constraints.append(f"角色{char_name}: {', '.join(descriptions[:2])}")
 
-                # 特殊角色匹配
-                special_patterns = [
-                    (r'山羊头', '山羊头'),
-                    (r'面具.*男', '面具男'),
-                    (r'年轻人', '年轻人'),
-                    (r'男女.*人', '人群'),
-                ]
-
-                # 提取数量约束
-                extracted_counts = {}
-
-                # 查找特殊角色数量
-                for pattern, char_type in special_patterns:
-                    matches = re.finditer(pattern, core_scene)
-                    for match in matches:
-                        # 检查前面是否有数量词
-                        start_pos = max(0, match.start() - 10)
-                        context = core_scene[start_pos:match.end()]
-
-                        # 查找数量词
-                        for num_pattern in number_patterns:
-                            num_match = re.search(num_pattern, context)
-                            if num_match:
-                                count_text = num_match.group(1)
-                                # 转换为数字
-                                count = self._convert_chinese_number(count_text)
-                                extracted_counts[char_type] = count
-                                break
-
-                # 2. 从结构化数据中提取角色信息
-                if structured_data and "characters_present" in structured_data:
-                    characters = structured_data["characters_present"]
-
-                    # 检查是否有"十个"相关的群体描述
-                    for char in characters:
-                        if "十" in str(char) or "10" in str(char):
-                            if "十个" in str(char):
-                                extracted_counts["人群"] = 10
-                            elif "十个沉睡" in str(char):
-                                extracted_counts["沉睡人群"] = 10
-
-                # 3. 根据提取的信息生成智能约束
-                if "山羊头" in extracted_counts:
-                    constraints.append(f"严格按照原文描述，{extracted_counts['山羊头']}个山羊头")
-                    logger.info(f"山羊头数量约束: 严格按原文{extracted_counts['山羊头']}个")
-                elif "面具男" in extracted_counts:
-                    constraints.append(f"严格按照原文描述，{extracted_counts['面具男']}个面具角色")
-                    logger.info(f"面具男数量约束: 严格按原文{extracted_counts['面具男']}个")
-
-                if "人群" in extracted_counts:
-                    constraints.append(f"严格按照原文描述，总共{extracted_counts['人群']}个角色")
-                    logger.info(f"人群数量约束: 严格按原文{extracted_counts['人群']}个")
-                elif "沉睡人群" in extracted_counts:
-                    constraints.append(f"严格按照原文描述，{extracted_counts['沉睡人群']}个沉睡的角色")
-                    logger.info(f"沉睡人群数量约束: 严格按原文{extracted_counts['沉睡人群']}个")
-
-                # 4. 智能角色一致性约束
-                constraints.append("严格保持原文中的角色数量和关系，不要增减角色数量")
-                constraints.append("确保每个角色都符合原文描述的外貌和状态")
-                logger.info("添加智能角色一致性约束")
+            # 通用角色一致性约束
+            constraints.append("确保角色外观和服装保持一致性")
+            constraints.append("严格按照场景描述生成相应数量的角色")
 
             return constraints
 
@@ -915,135 +944,6 @@ class ImageGenerator:
             logger.error(f"提取角色数量约束失败: {e}")
             return []
 
-    def _convert_chinese_number(self, num_text: str) -> int:
-        """将中文数字转换为阿拉伯数字"""
-        chinese_numbers = {
-            "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
-            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
-            "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15,
-            "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20
-        }
-
-        # 移除量词
-        num_text = num_text.replace("个", "")
-
-        # 直接映射
-        if num_text in chinese_numbers:
-            return chinese_numbers[num_text]
-
-        # 尝试转换阿拉伯数字
-        try:
-            return int(num_text)
-        except ValueError:
-            return 1  # 默认值
-
-    def _optimize_group_character_descriptions(self, structured_data: Dict[str, Any], character_info: List[str]) -> List[str]:
-        """
-        优化群体角色描述，避免AI误解群体角色的数量
-        特别处理"十个沉睡的男男女女"这样的情况
-        """
-        try:
-            if not structured_data:
-                return character_info
-
-            # 检查角色列表中是否有群体描述
-            characters_present = structured_data.get("characters_present", [])
-            character_descriptions = structured_data.get("character_descriptions", {})
-
-            # 优化后的角色描述列表
-            optimized_character_info = []
-
-            # 处理每个角色
-            for char_name in characters_present:
-                # 检查是否是群体角色描述
-                if self._is_group_character_description(char_name):
-                    # 从群体描述中提取关键信息
-                    optimized_desc = self._process_group_character(char_name, character_descriptions.get(char_name, []))
-                    if optimized_desc:
-                        optimized_character_info.append(optimized_desc)
-                        logger.info(f"优化群体角色描述: {char_name} -> {optimized_desc}")
-                else:
-                    # 保留非群体角色的原有描述
-                    for info in character_info:
-                        if char_name in info:
-                            optimized_character_info.append(info)
-                            break
-
-            # 如果没有找到任何角色描述，添加基本信息
-            if not optimized_character_info:
-                if characters_present:
-                    # 添加第一个角色作为主要角色
-                    main_char = characters_present[0]
-                    optimized_character_info.append(f"主要角色: {main_char}")
-                logger.info("没有找到角色描述，使用基本信息")
-
-            return optimized_character_info
-
-        except Exception as e:
-            logger.error(f"优化群体角色描述失败: {e}")
-            return character_info
-
-    def _is_group_character_description(self, char_name: str) -> bool:
-        """判断是否是群体角色描述"""
-        group_indicators = [
-            "十个", "10个", "群体", "一群", "男男女女", "众人", "大家", "其他人",
-            "沉睡的", "围坐", "参与者", "成员"
-        ]
-        return any(indicator in str(char_name) for indicator in group_indicators)
-
-    def _process_group_character(self, group_desc: str, traits: List[str]) -> str:
-        """处理群体角色描述，提取关键信息"""
-        try:
-            # 提取数量信息
-            count = self._extract_group_count(group_desc)
-
-            # 提取状态信息（如沉睡、围坐等）
-            state = self._extract_group_state(group_desc)
-
-            # 构建优化的描述
-            if count and state:
-                return f"{count}个{state}的角色"
-            elif count:
-                return f"{count}个角色"
-            elif state:
-                return f"{state}的角色"
-            else:
-                return "多个角色"
-
-        except Exception as e:
-            logger.error(f"处理群体角色失败: {e}")
-            return group_desc
-
-    def _extract_group_count(self, text: str) -> str:
-        """从群体描述中提取数量"""
-        import re
-
-        # 匹配数量
-        count_patterns = [
-            r'(\d+)个',
-            r'(十|一|二|三|四|五|六|七|八|九|十)(个)?',
-            r'(十个|十个)'
-        ]
-
-        for pattern in count_patterns:
-            match = re.search(pattern, text)
-            if match:
-                return match.group(1)
-
-        return ""
-
-    def _extract_group_state(self, text: str) -> str:
-        """从群体描述中提取状态信息"""
-        state_patterns = [
-            "沉睡", "围坐", "站着", "坐着", "躺着", "苏醒", "昏迷",
-            "紧张", "害怕", "冷静", "兴奋", "悲伤"
-        ]
-
-        for state in state_patterns:
-            if state in text:
-                return state
-
-        return ""
-
+  
 # 创建一个单例
 image_generator = ImageGenerator()  # 强制重新加载 - Sat Oct 25 18:09:21 CST 2025

@@ -5,6 +5,7 @@ Novel to Comic Maker - Main Startup File
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 import sys
@@ -50,20 +51,22 @@ app.add_middleware(
 )
 
 # ===== 注册API路由 =====
-from .routers.projects import router as projects_router
-from .routers.comics import router as comics_router
-from .routers.characters import router as characters_router
-from .routers.image_edit import router as image_edit_router
+from routers.projects import router as projects_router
+from routers.comics import router as comics_router
+from routers.characters import router as characters_router
+from routers.image_edit import router as image_edit_router
 try:
-    from .routers.workflows import router as workflows_router
-except Exception:
+    from routers.workflows import router as workflows_router
+    logger.info("工作流路由加载成功")
+except Exception as e:
+    logger.warning(f"工作流路由加载失败: {e}")
     workflows_router = None
 try:
-    from .routers.text2image import router as text2image_router
+    from routers.text2image import router as text2image_router
 except Exception:
     text2image_router = None
 try:
-    from .routers.context_management import router as context_router
+    from routers.context_management import router as context_router
 except Exception:
     context_router = None
 
@@ -78,6 +81,23 @@ if text2image_router:
     app.include_router(text2image_router)
 if context_router:
     app.include_router(context_router)
+
+# 配置静态文件服务
+try:
+    from config import settings
+    projects_dir = Path(settings.PROJECTS_DIR)
+    if projects_dir.exists():
+        app.mount("/projects", StaticFiles(directory=str(projects_dir)), name="projects")
+        logger.info(f"静态文件服务已挂载: /projects -> {projects_dir}")
+    else:
+        logger.warning(f"项目目录不存在: {projects_dir}")
+except Exception as e:
+    logger.warning(f"静态文件服务配置失败: {e}")
+    # 使用默认路径
+    projects_dir = Path(__file__).parent.parent / "projects"
+    if projects_dir.exists():
+        app.mount("/projects", StaticFiles(directory=str(projects_dir)), name="projects")
+        logger.info(f"静态文件服务已挂载(默认路径): /projects -> {projects_dir}")
 
 
 # TODO: [VULTURE] Flagged as unused. User wants to keep for now, but consider for future removal.

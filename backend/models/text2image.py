@@ -10,14 +10,17 @@ from typing import Optional, List, Dict, Any
 class Text2ImageRequest(BaseModel):
     """文生图请求模型"""
     prompt: str = Field(..., min_length=10, max_length=1000, description="图像描述文本")
-    model_preference: str = Field("seedream", description="首选模型")
+    model_preference: str = Field("doubao-seedream-4-0-250828", description="首选模型")
     size: str = Field("1024x1024", description="图像尺寸")
     quality: str = Field("standard", description="图像质量")
     style: str = Field("realistic", description="图像风格")
+    sequential_generation: str = Field("auto", description="组图设置: auto 或 disabled")
+    max_images: int = Field(1, ge=1, le=5, description="最大生成图片数量 (1-5)")
+    stream: bool = Field(True, description="是否启用流式输出")
 
 
 class Text2ImageResponse(BaseModel):
-    """文生图响应模型"""
+    """文生图响应模型（单图）"""
     success: bool
     image_url: Optional[str] = None
     local_path: Optional[str] = None
@@ -30,10 +33,27 @@ class Text2ImageResponse(BaseModel):
     error: Optional[str] = None
 
 
+class Text2ImageBatchResponse(BaseModel):
+    """文生图响应模型（组图）"""
+    success: bool
+    image_urls: Optional[List[str]] = None
+    local_paths: Optional[List[str]] = None
+    total_generated: int
+    prompt_used: str
+    model_used: str
+    size: str
+    quality: str
+    style: str
+    sequential_generation: str
+    max_images: int
+    generation_time: Optional[float] = None
+    error: Optional[str] = None
+
+
 class BatchGenerateRequest(BaseModel):
     """批量生成请求模型"""
     prompts: List[str] = Field(..., min_items=1, max_items=5, description="提示词列表")
-    model_preference: str = Field("seedream", description="首选模型")
+    model_preference: str = Field("doubao-seedream-4-0-250828", description="首选模型")
     size: str = Field("1024x1024", description="图像尺寸")
     quality: str = Field("standard", description="图像质量")
     style: str = Field("realistic", description="图像风格")

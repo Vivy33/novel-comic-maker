@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 import json
 from datetime import datetime
 
-from ..services.ai_service import AIService
+from services.ai_service import AIService
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +338,7 @@ class CoherenceChecker:
             analysis_result = await self.ai_service.generate_text(
                 prompt=analysis_prompt,
                 model_preference="seedream",
-                max_tokens=2000,
+                max_tokens=8000,
                 temperature=0.2
             )
 
@@ -468,7 +468,7 @@ class CoherenceChecker:
                 check_result = await self.ai_service.generate_text(
                     prompt=character_check_prompt,
                     model_preference="seedream",
-                    max_tokens=500,
+                    max_tokens=8000,
                     temperature=0.2
                 )
 
@@ -520,7 +520,7 @@ class CoherenceChecker:
                 transition_result = await self.ai_service.generate_text(
                     prompt=transition_prompt,
                     model_preference="seedream",
-                    max_tokens=300,
+                    max_tokens=8000,
                     temperature=0.2
                 )
 
@@ -575,7 +575,7 @@ class CoherenceChecker:
                 timeline_result = await self.ai_service.generate_text(
                     prompt=timeline_prompt,
                     model_preference="seedream",
-                    max_tokens=300,
+                    max_tokens=8000,
                     temperature=0.2
                 )
 
@@ -619,7 +619,7 @@ class CoherenceChecker:
             logic_result = await self.ai_service.generate_text(
                 prompt=logic_prompt,
                 model_preference="seedream",
-                max_tokens=500,
+                max_tokens=8000,
                 temperature=0.2
             )
 

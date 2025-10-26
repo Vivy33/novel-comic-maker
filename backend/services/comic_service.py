@@ -15,10 +15,11 @@ import logging
 
 from .file_system import ProjectFileSystem
 from .ai_service import AIService
-from ..agents.text_analyzer import TextAnalyzer
-from ..agents.script_generator import ScriptGenerator
-from ..agents.image_generator import ImageGenerator
-from ..models.comic import TaskStatus, GenerationConfig
+from agents.text_analyzer import TextAnalyzer
+from agents.script_generator import ScriptGenerator
+from agents.image_generator import ImageGenerator
+from agents.text_segmenter import TextSegmenter
+from models.comic import TaskStatus, GenerationConfig, ComicPanel
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class ComicService:
         self.text_analyzer = TextAnalyzer()
         self.script_generator = ScriptGenerator()
         self.image_generator = ImageGenerator()
+        self.text_segmenter = TextSegmenter()
         self.active_tasks: Dict[str, TaskStatus] = {}
         logger.info("漫画服务初始化完成（包含AI Agent）")
 
@@ -179,68 +181,121 @@ class ComicService:
             characters = text_analysis_result.get("characters", [])
             self.file_system.save_characters(project_path, characters)
 
-            # 步骤4: 分段文本并生成章节 (35-45%)
-            self._update_task_status(task_id, "running", 35.0, "分段文本，准备生成脚本")
+            # 步骤4: 文本分段和故事章节划分 (35-45%)
+            self._update_task_status(task_id, "running", 35.0, "分析文本结构，划分故事章节")
 
-            # 将文本分为逻辑段落作为章节
-            text_segments = self.text_analyzer._split_text(novel_text, 5000)  # 每段5000字符
-            chapters = []
+            # 智能文本分段：将长篇小说分为合理的故事章节
+            text_segments = await self.text_segmenter.segment_text(
+                novel_text,
+                max_segment_length=2000,  # 增大章节长度，每个章节2000字符
+                min_segment_length=500,   # 最小500字符保证故事完整性
+                preserve_context=True
+            )
 
-            for i, segment in enumerate(text_segments):
+            logger.info(f"将小说分为 {len(text_segments)} 个故事章节")
+
+            # 为每个故事章节生成内容
+            for i, story_segment in enumerate(text_segments):
                 chapter_id = f"chapter_{i+1:03d}"
+                chapter_title = f"第{i+1}章"
 
-                # 为每个段落生成漫画脚本
+                # 创建故事章节目录结构
                 self._update_task_status(
                     task_id, "running",
                     35.0 + (i / len(text_segments)) * 10.0,
-                    f"生成第 {i+1}/{len(text_segments)} 章节脚本"
+                    f"创建第 {i+1}/{len(text_segments)} 章节结构"
                 )
 
-                script_result = await self.script_generator.generate(text_analysis_result)
-
-                # 保存脚本
-                self.file_system.save_processing_result(
-                    project_path, f"script_{chapter_id}", script_result
+                # 使用新的章节创建方法
+                created_chapter_id = self.file_system.create_story_chapter(
+                    project_id, i+1, story_segment, chapter_title
                 )
 
-                chapters.append({
-                    "chapter_id": chapter_id,
-                    "script": script_result,
-                    "text_segment": segment
+                # 步骤5: 生成章节脚本和分镜 (45-65%)
+                self._update_task_status(
+                    task_id, "running",
+                    45.0 + (i / len(text_segments)) * 20.0,
+                    f"生成第 {i+1}/{len(text_segments)} 章节的分镜脚本"
+                )
+
+                # 为该故事章节生成漫画脚本（包含多个场景）
+                script_result = await self.script_generator.generate({
+                    "text": story_segment,
+                    "characters": text_analysis_result.get("characters", []),
+                    "scenes": text_analysis_result.get("scenes", [])
                 })
 
-            # 步骤5: 生成图像 (45-90%)
-            self._update_task_status(task_id, "running", 45.0, "开始生成漫画图像")
-
-            for i, chapter in enumerate(chapters):
-                chapter_id = chapter["chapter_id"]
-                script = chapter["script"]
-
-                # 更新进度
-                progress = 45.0 + (i / len(chapters)) * 45.0
+                # 步骤6: 生成该章节的所有分镜画面 (65-90%)
                 self._update_task_status(
-                    task_id, "running", progress,
-                    f"生成第 {i+1}/{len(chapters)} 章节图像"
+                    task_id, "running",
+                    65.0 + (i / len(text_segments)) * 25.0,
+                    f"生成第 {i+1}/{len(text_segments)} 章节的分镜画面"
                 )
 
-                # 使用AI图像生成器
-                generated_images = await self.image_generator.generate_images_for_script(
-                    script, str(self.file_system.projects_dir / project_path)
+                # 确定该章节需要生成的画面数量
+                panels_count = getattr(config, 'panels_per_chapter', 6)
+
+                # 为该章节生成多个分镜画面
+                panels = []
+                for panel_idx in range(panels_count):
+                    try:
+                        # 为每个分镜生成图像
+                        image_prompt = self._create_panel_prompt(
+                            script_result, panel_idx, panels_count
+                        )
+
+                        # 生成图像
+                        image_result = await self.image_generator.generate_image(
+                            prompt=image_prompt,
+                            output_dir=str(self.file_system.projects_dir / project_path / "chapters" / created_chapter_id / "images"),
+                            filename_prefix=f"scene_option_{panel_idx}_"
+                        )
+
+                        # 创建分镜画面对象
+                        panel = ComicPanel(
+                            panel_id=panel_idx + 1,
+                            description=image_prompt,
+                            scene_description=script_result.get("scenes", [f"场景{panel_idx+1}"])[panel_idx % len(script_result.get("scenes", ["场景1"]))],
+                            characters=script_result.get("characters", [])[:3],  # 限制角色数量
+                            scene=script_result.get("setting", "默认场景"),
+                            emotion=script_result.get("emotions", ["平静"])[panel_idx % len(script_result.get("emotions", ["平静"]))],
+                            image_path=image_result.get("image_path"),
+                            confirmed=False,
+                            generated_at=datetime.now().isoformat()
+                        )
+                        panels.append(panel)
+
+                    except Exception as e:
+                        logger.error(f"生成第{panel_idx+1}个分镜画面失败: {e}")
+                        # 创建占位画面以保证数量一致
+                        panel = ComicPanel(
+                            panel_id=panel_idx + 1,
+                            description=f"分镜画面 {panel_idx + 1}",
+                            scene_description=f"场景 {panel_idx + 1}",
+                            confirmed=False,
+                            generated_at=datetime.now().isoformat()
+                        )
+                        panels.append(panel)
+
+                # 保存该章节的所有分镜画面
+                self.file_system.save_chapter_panels(
+                    project_id, created_chapter_id, panels
                 )
 
-                # 保存完整的漫画数据
-                comic_data = {
-                    "chapter_id": chapter_id,
-                    "script": script,
-                    "images": generated_images,
-                    "created_at": datetime.now().isoformat(),
-                    "style": config.style,
-                    "quality": config.quality
-                }
+                # 保存脚本信息
+                chapter_dir = (self.file_system.projects_dir / project_path / "chapters" / created_chapter_id)
+                self.file_system._save_json(
+                    chapter_dir / "script.json",
+                    {
+                        "script": script_result,
+                        "story_segment": story_segment,
+                        "created_at": datetime.now().isoformat()
+                    }
+                )
 
-                self.file_system.save_chapter_comic(project_path, chapter_id, comic_data)
+                logger.info(f"章节 {created_chapter_id} 生成完成，包含 {len(panels)} 个分镜画面")
 
-            # 步骤5: 完成 (100%)
+            # 步骤7: 完成 (100%)
             self._update_task_status(task_id, "completed", 100.0, "漫画生成完成")
 
             # 更新项目状态
@@ -321,4 +376,38 @@ class ComicService:
             self.active_tasks[task_id].message = message
             self.active_tasks[task_id].updated_at = datetime.now().isoformat()
 
-            logger.info(f"任务状态更新 {task_id}: {status} ({progress:.1f}%) - {message}")
+    def _create_panel_prompt(self, script_result: dict, panel_index: int, total_panels: int) -> str:
+        """
+        为分镜画面创建生成提示
+
+        Args:
+            script_result: 脚本生成结果
+            panel_index: 当前分镜索引
+            total_panels: 总分镜数量
+
+        Returns:
+            图像生成提示
+        """
+        # 从脚本中提取关键信息
+        scenes = script_result.get("scenes", ["默认场景"])
+        characters = script_result.get("characters", [])
+        setting = script_result.get("setting", "现代背景")
+        style = script_result.get("style", "漫画风格")
+        emotions = script_result.get("emotions", ["平静"])
+
+        # 为当前分镜选择场景和情绪
+        current_scene = scenes[panel_index % len(scenes)]
+        current_emotion = emotions[panel_index % len(emotions)]
+
+        # 构建提示
+        character_desc = ""
+        if characters:
+            main_characters = characters[:2]  # 限制主要角色数量
+            character_desc = f"，主要角色：{', '.join(main_characters)}"
+
+        prompt = f"""{style}漫画分镜画面第{panel_index + 1}张：{current_scene}
+场景设定：{setting}{character_desc}
+情绪氛围：{current_emotion}
+画面要求：高质量的漫画分镜，清晰的构图，适合连环画风格，角色表情生动，背景细节丰富"""
+
+        return prompt

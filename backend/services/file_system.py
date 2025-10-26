@@ -644,13 +644,38 @@ class ProjectFileSystem:
                 ))
             except Exception as e:
                 logger.warning(f"获取章节 {chapter_id} 详情失败: {e}")
-                # 如果获取详情失败，创建基本信息
-                chapters_info.append(ChapterInfo(
-                    chapter_id=chapter_id,
-                    created_at=created_at,
-                    updated_at=updated_at,
-                    status="error"
-                ))
+                # 如果获取详情失败，尝试创建基本信息
+                try:
+                    # 尝试从章节ID解析章节编号
+                    chapter_number = 1
+                    if chapter_id.startswith("chapter_"):
+                        try:
+                            chapter_number = int(chapter_id.split("_")[1])
+                        except (ValueError, IndexError):
+                            chapter_number = 1
+
+                    # 检查是否有images目录
+                    images_dir = chapter_dir / "images"
+                    has_images = images_dir.exists() and any(images_dir.iterdir())
+
+                    status = "pending" if not has_images else "created"
+
+                    chapters_info.append(ChapterInfo(
+                        chapter_id=chapter_id,
+                        title=f"第{chapter_number}章",
+                        created_at=created_at,
+                        updated_at=updated_at,
+                        status=status,
+                        chapter_number=chapter_number
+                    ))
+                except Exception as fallback_e:
+                    logger.error(f"创建章节 {chapter_id} 基本信息也失败: {fallback_e}")
+                    chapters_info.append(ChapterInfo(
+                        chapter_id=chapter_id,
+                        created_at=created_at,
+                        updated_at=updated_at,
+                        status="error"
+                    ))
 
         # 按章节ID排序
         chapters_info.sort(key=lambda x: x.chapter_id)
@@ -684,11 +709,21 @@ class ProjectFileSystem:
         created_at = datetime.fromtimestamp(chapter_dir.stat().st_ctime).isoformat()
         updated_at = datetime.fromtimestamp(chapter_dir.stat().st_mtime).isoformat()
 
+        # 解析章节编号和标题
+        chapter_number = 1
+        title = None
+        if chapter_id.startswith("chapter_"):
+            try:
+                chapter_number = int(chapter_id.split("_")[1])
+                title = f"第{chapter_number}章"
+            except (ValueError, IndexError):
+                title = f"第1章"
+
         # 尝试读取comic.json
         comic_file = chapter_dir / "comic.json"
         script = None
         images = []
-        status = "completed"
+        status = "created"  # 默认为created而不是completed
 
         if comic_file.exists():
             try:
@@ -712,30 +747,40 @@ class ProjectFileSystem:
         # 处理图像信息（无论有没有comic.json都要处理）
         images_dir = chapter_dir / "images"
         if images_dir.exists():
-            for image_file in images_dir.iterdir():
-                if image_file.is_file() and image_file.suffix.lower() in ['.png', '.jpg', '.jpeg']:
-                    # 从文件名解析panel_id
-                    try:
-                        # 文件名格式示例: scene_option_1_1761417400.png
-                        filename_parts = image_file.stem.split('_')
-                        panel_id = int(filename_parts[2]) if len(filename_parts) >= 3 else 0
+            image_files = [f for f in images_dir.iterdir() if f.is_file() and f.suffix.lower() in ['.png', '.jpg', '.jpeg']]
+
+            # 按文件名排序以确保顺序一致
+            image_files.sort(key=lambda f: f.name)
+
+            for idx, image_file in enumerate(image_files):
+                # 从文件名解析panel_id
+                panel_id = idx + 1  # 默认使用顺序编号
+                try:
+                    # 文件名格式示例: scene_option_1_1761417400.png
+                    filename_parts = image_file.stem.split('_')
+                    if len(filename_parts) >= 3 and filename_parts[2].isdigit():
+                        panel_id = int(filename_parts[2])
                         logger.debug(f"解析文件名 {image_file.name} 得到 panel_id: {panel_id}")
-                    except (ValueError, IndexError):
-                        panel_id = 0
-                        logger.warning(f"无法从文件名 {image_file.name} 解析panel_id，使用默认值0")
+                    else:
+                        # 如果无法解析，使用顺序编号
+                        panel_id = idx + 1
+                        logger.debug(f"使用顺序编号 {image_file.name} -> panel_id: {panel_id}")
+                except (ValueError, IndexError):
+                    panel_id = idx + 1
+                    logger.debug(f"解析文件名失败，使用顺序编号 {image_file.name} -> panel_id: {panel_id}")
 
-                    # 获取文件创建时间
-                    generated_at = datetime.fromtimestamp(
-                        image_file.stat().st_ctime
-                    ).isoformat()
+                # 获取文件创建时间
+                generated_at = datetime.fromtimestamp(
+                    image_file.stat().st_ctime
+                ).isoformat()
 
-                    images.append(ChapterImage(
-                        image_path=f"/projects/{project_identifier}/chapters/{chapter_id}/images/{image_file.name}",
-                        panel_id=panel_id,
-                        confirmed=confirmation_status.get(panel_id, False),  # 从comic.json读取确认状态
-                        generated_at=generated_at,
-                        description=f"画面 {panel_id}"
-                    ))
+                images.append(ChapterImage(
+                    image_path=f"/projects/{project_identifier}/chapters/{chapter_id}/images/{image_file.name}",
+                    panel_id=panel_id,
+                    confirmed=confirmation_status.get(panel_id, False),  # 从comic.json读取确认状态
+                    generated_at=generated_at,
+                    description=f"画面 {panel_id}"
+                ))
 
         # 如果没有图像文件，设置状态为pending
         if not images:
@@ -748,6 +793,7 @@ class ProjectFileSystem:
 
         return ChapterDetail(
             chapter_id=chapter_id,
+            title=title,
             created_at=created_at,
             updated_at=updated_at,
             status=status,
@@ -755,7 +801,8 @@ class ProjectFileSystem:
             images=images,
             total_panels=total_panels,
             confirmed_panels=confirmed_panels,
-            unconfirmed_panels=unconfirmed_panels
+            unconfirmed_panels=unconfirmed_panels,
+            chapter_number=chapter_number
         )
 
     def delete_chapter_panel(self, project_identifier: str, chapter_id: str, panel_id: int) -> None:
@@ -1215,17 +1262,23 @@ class ProjectFileSystem:
         pending_chapters = 0
 
         # 扫描章节目录
+        logger.info(f"扫描章节目录: {chapters_dir}")
         for chapter_dir in chapters_dir.iterdir():
+            logger.info(f"发现目录: {chapter_dir.name}")
             if not chapter_dir.is_dir() or not chapter_dir.name.startswith("chapter_"):
+                logger.info(f"跳过目录: {chapter_dir.name}")
                 continue
 
             chapter_id = chapter_dir.name
 
             # 获取章节信息
             chapter_info_file = chapter_dir / "chapter_info.json"
+            logger.info(f"检查章节信息文件: {chapter_info_file}")
             if chapter_info_file.exists():
+                logger.info(f"章节 {chapter_id} 的chapter_info.json文件存在，尝试读取")
                 try:
                     chapter_data = self._load_json(chapter_info_file)
+                    logger.info(f"成功读取章节 {chapter_id} 数据: {chapter_data}")
                     chapter_info = ChapterInfo(
                         chapter_id=chapter_id,
                         title=chapter_data.get("title"),
@@ -1251,8 +1304,51 @@ class ProjectFileSystem:
                         pending_chapters += 1
 
                 except Exception as e:
-                    logger.warning(f"读取章节 {chapter_id} 信息失败: {e}")
-                    continue
+                    logger.error(f"章节 {chapter_id} 读取chapter_info.json失败: {e}")
+                    logger.info(f"章节 {chapter_id} 没有chapter_info.json，使用回退方法")
+                    # 尝试回退到旧方法
+                    try:
+                        logger.info(f"章节 {chapter_id} 使用回退方法")
+                        # 获取章节创建和更新时间
+                        created_at = datetime.fromtimestamp(chapter_dir.stat().st_ctime).isoformat()
+                        updated_at = datetime.fromtimestamp(chapter_dir.stat().st_mtime).isoformat()
+
+                        # 尝试从章节ID解析章节编号和标题
+                        chapter_number = 1
+                        title = None
+                        if chapter_id.startswith("chapter_"):
+                            try:
+                                chapter_number = int(chapter_id.split("_")[1])
+                                title = f"第{chapter_number}章"
+                            except (ValueError, IndexError):
+                                title = f"第1章"
+
+                        # 检查是否有images目录和图像
+                        images_dir = chapter_dir / "images"
+                        has_images = images_dir.exists() and any(images_dir.iterdir())
+
+                        status = "created" if has_images else "pending"
+
+                        logger.info(f"创建章节信息: {chapter_id}, 标题: {title}, 编号: {chapter_number}, 状态: {status}")
+
+                        chapter_info = ChapterInfo(
+                            chapter_id=chapter_id,
+                            title=title,
+                            created_at=created_at,
+                            updated_at=updated_at,
+                            status=status,
+                            total_panels=0,  # 这里不详细计算，让详情API处理
+                            confirmed_panels=0,
+                            unconfirmed_panels=0,
+                            chapter_number=chapter_number
+                        )
+
+                        chapters_info.append(chapter_info)
+                        logger.info(f"使用回退方法成功创建章节 {chapter_id} 信息，当前总数: {len(chapters_info)}")
+
+                    except Exception as fallback_e:
+                        logger.error(f"章节 {chapter_id} 回退方法也失败: {fallback_e}")
+                        continue
 
         # 按章节编号排序
         chapters_info.sort(key=lambda x: x.chapter_number)

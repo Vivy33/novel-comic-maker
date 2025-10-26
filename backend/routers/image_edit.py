@@ -7,11 +7,15 @@ Provides image-to-image generation and editing functionality
 """
 
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+import httpx
+import io
 from typing import Optional
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+import asyncio
+from pathlib import Path
 
 from services.ai_service import AIService
 from services.file_system import ProjectFileSystem
@@ -28,7 +32,7 @@ from utils.image_utils import (
 logger = logging.getLogger(__name__)
 
 # 创建路由器
-router = APIRouter(prefix="/image-edit", tags=["image-edit"])
+router = APIRouter(prefix="/api/image-edit", tags=["image-edit"])
 
 # 依赖注入
 def get_ai_service():
@@ -39,6 +43,58 @@ def get_file_system():
 
 def get_image_processor():
     return ImageProcessor()
+
+
+def cleanup_temp_files():
+    """
+    清理过期的临时文件
+    清理超过1小时的编辑结果文件
+    """
+    try:
+        temp_dirs = [
+            settings.TEMP_DOWNLOADS_DIR,
+            settings.TEMP_UPLOADS_DIR,
+            settings.TEMP_PROCESSING_DIR
+        ]
+
+        cutoff_time = datetime.now() - timedelta(hours=1)
+        cleaned_count = 0
+
+        for temp_dir in temp_dirs:
+            if temp_dir.exists():
+                for file_path in temp_dir.iterdir():
+                    if file_path.is_file():
+                        # 检查文件修改时间
+                        file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                        if file_mtime < cutoff_time:
+                            try:
+                                file_path.unlink()
+                                cleaned_count += 1
+                                logger.debug(f"清理临时文件: {file_path}")
+                            except Exception as e:
+                                logger.warning(f"清理文件失败 {file_path}: {e}")
+
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个过期临时文件")
+
+    except Exception as e:
+        logger.error(f"清理临时文件失败: {e}")
+
+
+async def periodic_cleanup():
+    """
+    定期清理临时文件的后台任务
+    每30分钟执行一次
+    """
+    while True:
+        try:
+            cleanup_temp_files()
+            await asyncio.sleep(1800)  # 30分钟
+        except Exception as e:
+            logger.error(f"定期清理任务失败: {e}")
+            await asyncio.sleep(300)  # 发生错误时5分钟后重试
+
+
 
 
 @router.post("/upload-base64")
@@ -78,7 +134,14 @@ async def upload_image_base64(
         image_info = get_image_info(base64_data)
 
         # 处理上传的图像
-        process_result = await image_processor.process_uploadedImage(base64_data)
+        try:
+            process_result = await image_processor.process_uploadedImage(base64_data)
+        except Exception as process_error:
+            logger.warning(f"图像处理失败，返回基本信息: {process_error}")
+            process_result = {
+                "success": False,
+                "error": str(process_error)
+            }
 
         # 清理临时文件
         os.remove(temp_path)
@@ -120,16 +183,33 @@ async def edit_image_with_base64(
             raise HTTPException(status_code=400, detail="无效的base64掩码格式")
 
         # 调用AI服务进行图像编辑
-        result_url = await ai_service.edit_image_with_base64(
-            prompt=prompt,
-            base64_image=base64_image,
-            base64_mask=base64_mask,
-            model_preference=model_preference,
-            size=size
-        )
+        try:
+            result_url = await ai_service.edit_image_with_base64(
+                prompt=prompt,
+                base64_image=base64_image,
+                base64_mask=base64_mask,
+                model_preference=model_preference,
+                size=size
+            )
+
+            if not result_url or result_url.startswith("placeholder://"):
+                # AI服务返回占位符，说明处理失败
+                error_msg = "图像编辑服务暂时不可用，请稍后重试"
+                logger.error(f"AI编辑失败，返回占位符: {result_url}")
+                raise HTTPException(status_code=503, detail=error_msg)
+
+        except Exception as ai_error:
+            logger.error(f"AI图像编辑失败: {ai_error}")
+            error_msg = "图像编辑失败，可能是网络问题或服务暂时不可用"
+            raise HTTPException(status_code=503, detail=error_msg)
 
         # 下载结果到本地
-        local_path = await ai_service.download_image_result(result_url)
+        try:
+            local_path = await ai_service.download_image_result(result_url)
+        except Exception as download_error:
+            logger.error(f"下载编辑结果失败: {download_error}")
+            # 即使下载失败，也返回URL让前端直接访问
+            local_path = None
 
         return {
             "success": True,
@@ -203,19 +283,39 @@ async def edit_uploaded_image(
             os.remove(mask_path)
 
         # 调用AI服务进行图像编辑
-        result_url = await ai_service.edit_image_with_base64(
-            prompt=prompt,
-            base64_image=base64_image,
-            base64_mask=base64_mask,
-            model_preference=model_preference,
-            size=size
-        )
+        try:
+            result_url = await ai_service.edit_image_with_base64(
+                prompt=prompt,
+                base64_image=base64_image,
+                base64_mask=base64_mask,
+                model_preference=model_preference,
+                size=size
+            )
+
+            if not result_url or result_url.startswith("placeholder://"):
+                # AI服务返回占位符，说明处理失败
+                error_msg = "图像编辑服务暂时不可用，请稍后重试"
+                logger.error(f"AI编辑失败，返回占位符: {result_url}")
+                raise HTTPException(status_code=503, detail=error_msg)
+
+        except Exception as ai_error:
+            logger.error(f"AI图像编辑失败: {ai_error}")
+            error_msg = "图像编辑失败，可能是网络问题或服务暂时不可用"
+            raise HTTPException(status_code=503, detail=error_msg)
 
         # 下载结果到本地
-        local_path = await ai_service.download_image_result(result_url)
+        try:
+            local_path = await ai_service.download_image_result(result_url)
+        except Exception as download_error:
+            logger.error(f"下载编辑结果失败: {download_error}")
+            # 即使下载失败，也返回URL让前端直接访问
+            local_path = None
 
         # 清理临时文件
-        os.remove(temp_path)
+        try:
+            os.remove(temp_path)
+        except Exception as cleanup_error:
+            logger.warning(f"清理临时文件失败: {cleanup_error}")
 
         return {
             "success": True,
@@ -392,19 +492,39 @@ async def image_to_image_generation(
         base64_image = encode_file_to_base64(temp_path)
 
         # 调用AI服务进行图生图
-        result_url = await ai_service.image_to_image_with_base64(
-            prompt=prompt,
-            base64_image=base64_image,
-            model_preference=model_preference,
-            size=size,
-            strength=strength
-        )
+        try:
+            result_url = await ai_service.image_to_image_with_base64(
+                prompt=prompt,
+                base64_image=base64_image,
+                model_preference=model_preference,
+                size=size,
+                strength=strength
+            )
+
+            if not result_url or result_url.startswith("placeholder://"):
+                # AI服务返回占位符，说明处理失败
+                error_msg = "图像生成服务暂时不可用，请稍后重试"
+                logger.error(f"AI图生图失败，返回占位符: {result_url}")
+                raise HTTPException(status_code=503, detail=error_msg)
+
+        except Exception as ai_error:
+            logger.error(f"AI图生图失败: {ai_error}")
+            error_msg = "图像生成失败，可能是网络问题或服务暂时不可用"
+            raise HTTPException(status_code=503, detail=error_msg)
 
         # 下载结果到本地
-        local_path = await ai_service.download_image_result(result_url)
+        try:
+            local_path = await ai_service.download_image_result(result_url)
+        except Exception as download_error:
+            logger.error(f"下载生成结果失败: {download_error}")
+            # 即使下载失败，也返回URL让前端直接访问
+            local_path = None
 
         # 清理临时文件
-        os.remove(temp_path)
+        try:
+            os.remove(temp_path)
+        except Exception as cleanup_error:
+            logger.warning(f"清理临时文件失败: {cleanup_error}")
 
         return {
             "success": True,
@@ -516,3 +636,35 @@ async def image_edit_health_check(ai_service: AIService = Depends(get_ai_service
             "service_status": "error",
             "error": str(e)
         }
+
+
+@router.get("/proxy-download")
+async def proxy_download_image(image_url: str):
+    """
+    代理下载图片 - 解决CORS跨域问题
+    Proxy download image - Solve CORS cross-origin issue
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 下载图片
+            response = await client.get(image_url)
+            response.raise_for_status()
+
+            # 获取内容类型
+            content_type = response.headers.get('content-type', 'image/jpeg')
+
+            # 创建流式响应
+            return StreamingResponse(
+                io.BytesIO(response.content),
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f"attachment; filename=edited-image-{int(datetime.now().timestamp())}.jpg"
+                }
+            )
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"代理下载图片失败 - HTTP错误: {e}")
+        raise HTTPException(status_code=e.response.status_code, detail=f"下载失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"代理下载图片失败: {e}")
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")

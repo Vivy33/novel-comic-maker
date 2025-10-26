@@ -94,11 +94,11 @@ class CostController:
     def _load_pricing_config(self, config_file: Optional[str]) -> Dict[str, APIPricing]:
         """加载定价配置"""
         default_pricing = {
-            "doubao-seed-1-6-flash-250828": APIPricing(
-                model_name="doubao-seed-1-6-flash-250828",
+            "deepseek-v3-1-terminus": APIPricing(
+                model_name="deepseek-v3-1-terminus",
                 cost_per_1k_input_tokens=0.003,
                 cost_per_1k_output_tokens=0.006,
-                max_tokens_per_request=8000
+                max_tokens_per_request=32768
             ),
             "doubao-seedream-4-0-250828": APIPricing(
                 model_name="doubao-seedream-4-0-250828",

@@ -2,12 +2,12 @@
 图像生成Agent
 Image Generator Agent
 
-负责根据漫画脚本生成或编辑图像。
+负责根据漫画脚本中的描述生成和编辑图像。
 """
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
-from ..services.ai_service import volc_service
+from services.ai_service import volc_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,135 +18,1032 @@ EDIT_MODEL = "doubao-seedream-4-0-250828"
 class ImageGenerator:
     """
     根据漫画脚本中的描述生成和编辑图像。
+    支持单个场景生成多张备选图像（组图功能）。
     """
 
-    async def generate_images_for_script(self, script: Dict[str, Any], project_path: str) -> List[Dict[str, Any]]:
+    def __init__(self):
+        pass
+
+    def _get_character_references(self, project_path: str, selected_characters: List[str]) -> Dict[str, Any]:
         """
-        为整个脚本的每个分镜生成图像。
+        获取选定角色的参考图片和角色卡信息
 
         Args:
-            script: 包含多个分镜(panel)的脚本字典。
-            project_path: 项目路径，用于保存生成的图像。
+            project_path: 项目路径
+            selected_characters: 选定的角色名称列表
 
         Returns:
-            一个列表，包含每个分镜的图像生成结果。
+            包含角色参考信息的字典
         """
+        try:
+            from services.file_system import ProjectFileSystem
+            import json
+            import os
+
+            fs = ProjectFileSystem()
+            character_info = {}
+
+            # 获取项目角色列表
+            project_id = os.path.basename(project_path)
+            characters = fs.get_project_characters(project_path)
+
+            for character in characters:
+                if character.get("name") in selected_characters:
+                    char_name = character["name"]
+                    char_data = {
+                        "name": char_name,
+                        "description": character.get("description", ""),
+                        "traits": character.get("traits", []),
+                        "reference_images": character.get("reference_images", [])
+                    }
+
+                    # 获取角色参考图片路径
+                    char_dir = f"{project_path}/characters/{char_name}"
+                    if os.path.exists(char_dir):
+                        # 查找角色卡JSON文件
+                        json_files = [f for f in os.listdir(char_dir) if f.endswith('.json')]
+                        if json_files:
+                            json_path = os.path.join(char_dir, json_files[0])
+                            with open(json_path, 'r', encoding='utf-8') as f:
+                                char_data["character_card"] = json.load(f)
+
+                        # 查找角色正反面参考图片
+                        image_files = [f for f in os.listdir(char_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+                        char_data["reference_image_paths"] = [os.path.join(char_dir, img) for img in image_files]
+
+                    character_info[char_name] = char_data
+
+            return character_info
+
+        except Exception as e:
+            logger.warning(f"获取角色参考信息失败: {e}")
+            return {}
+
+    async def generate_images_for_script(self, script: Dict[str, Any], project_path: str, max_images: int = 3, segment_index: int = 0) -> Dict[str, Any]:
+        """
+        为单个场景描述生成多张备选图像（组图功能）。
+
+        Args:
+            script: 包含单个场景描述的脚本字典。
+            project_path: 项目路径，用于保存生成的图像。
+            max_images: 生成图像数量，默认3张（用户可配置2-4张）
+            segment_index: 段落索引，用于确定章节目录
+
+        Returns:
+            包含该场景的多张备选图像结果和元数据。
+        """
+        
         if not volc_service.is_available():
             logger.error("图像生成失败，因为火山引擎服务不可用。")
-            return [{"error": "AI service is not available."}]
+            return {"error": "AI service is not available."}
 
-        panels = script.get("panels", [])
-        if not panels:
-            logger.warning("脚本中没有找到任何分镜。")
-            return []
+        # 获取单个场景描述（修正：不再是多分镜）
+        scene_description = script.get("scene_description", "")
+        if not scene_description:
+            logger.warning("脚本中没有找到场景描述。")
+            return {"error": "No scene description found."}
 
-        logger.info(f"开始为 {len(panels)} 个分镜生成图像...")
-        
-        generated_images = []
-        for panel in panels:
-            panel_number = panel.get("panel_number", "unknown")
-            description = panel.get("scene_description", "")
+        logger.info(f"开始为单个场景生成 {max_images} 张备选图像...")
 
-            if not description:
-                logger.warning(f"分镜 {panel_number} 没有场景描述，跳过图像生成。")
-                continue
+        # 优化：预处理场景描述，确保简洁精准，控制在300字符以内
+        # 首先获取前情提要图片路径
+        previous_context = script.get("previous_context", "")
+        reference_image_path = None
+        if previous_context:
+            import os
 
-            logger.info(f"正在为分镜 {panel_number} 生成图像...")
-            image_url = volc_service.text_to_image(GENERATION_MODEL, prompt=description)
+            # 处理项目相对路径 (如 /projects/2025.10.25_11.48_勇者斗恶龙/...)
+            image_path = None
+            if previous_context.startswith("/projects/"):
+                # 将项目相对路径转换为绝对路径
+                # 格式: /projects/项目名/子路径 -> 当前工作目录/projects/项目名/子路径
+                relative_path = previous_context[1:]  # 去掉开头的 /
+                image_path = os.path.join(os.getcwd(), relative_path)
+                logger.info(f"转换项目相对路径（图片生成）: {previous_context} -> {image_path}")
+            elif os.path.isfile(previous_context):
+                # 直接是文件系统路径
+                image_path = previous_context
 
-            if image_url:
-                # 下载图像到本地
-                try:
-                    from ..utils.image_utils import download_image_from_url
-                    import time
-
-                    filename = f"panel_{panel_number}_{int(time.time())}.png"
-                    output_dir = f"{project_path}/chapters/chapter_001/images"
-                    output_path = f"{output_dir}/{filename}"
-
-                    # 使用真实的下载逻辑
-                    local_path = await download_image_from_url(image_url, output_path)
-                    logger.info(f"图像已下载到本地: {local_path}")
-
-                    generated_images.append({
-                        "panel_number": panel_number,
-                        "status": "success",
-                        "image_url": image_url,
-                        "local_path": local_path
-                    })
-                except Exception as e:
-                    logger.error(f"下载分镜 {panel_number} 的图像失败: {e}")
-                    generated_images.append({
-                        "panel_number": panel_number,
-                        "status": "error",
-                        "reason": f"Failed to download image: {e}"
-                    })
+            if image_path and os.path.isfile(image_path):
+                reference_image_path = image_path  # 使用绝对路径
+                logger.info(f"检测到有效的前情提要图片: {reference_image_path}")
             else:
-                logger.error(f"为分镜 {panel_number} 生成图像失败。")
-                generated_images.append({
-                    "panel_number": panel_number,
-                    "status": "error",
-                    "reason": "AI service failed to generate image."
-                })
-        
-        return generated_images
+                logger.warning(f"前情提要图片路径无效: {previous_context}")
 
-    async def edit_image(self, original_image_path: str, edit_prompt: str, output_dir: str = None) -> Optional[str]:
+        optimized_prompt = self._optimize_scene_description(scene_description, script, project_path, reference_image_path)
+
+        logger.info(f"生成场景图像，优化后prompt长度: {len(optimized_prompt)} 字符")
+
+        try:
+            # 根据是否有参考图片选择不同的生成策略
+            if reference_image_path:
+                # 使用图片参考API进行图生图
+                logger.info(f"使用前情提要图片参考生成连贯性画面: {reference_image_path}")
+
+                # 对于有参考图片的情况，一次生成一张，然后生成变体
+                image_urls = []
+
+                for i in range(max_images):
+                    if i == 0:
+                        # 第一张图片使用参考图生成
+                        result_url = volc_service.multi_reference_text_to_image(
+                            model=GENERATION_MODEL,
+                            prompt=optimized_prompt,
+                            reference_images=[reference_image_path],
+                            max_images=1
+                        )
+                    else:
+                        # 后续图片使用变体prompt生成
+                        variant_prompt = self._create_variant_prompt(optimized_prompt, i, max_images)
+                        result_url = volc_service.text_to_image(
+                            model=GENERATION_MODEL,
+                            prompt=variant_prompt,
+                            max_images=1,
+                            stream=False
+                        )
+
+                    if result_url:
+                        if isinstance(result_url, list):
+                            result_url = result_url[0] if result_url else None
+                        image_urls.append(result_url)
+                    else:
+                        logger.warning(f"第{i+1}张图片生成失败，返回空URL")
+                        image_urls.append(None)
+
+                logger.info(f"使用图片参考生成了 {len([url for url in image_urls if url])} 张有效图像")
+
+            else:
+                # 使用多次调用来模拟组图生成（无参考图片）
+                image_urls = []
+
+                logger.info(f"开始通过多次调用生成 {max_images} 张备选图像...")
+
+                # 获取结构化数据，用于变体prompt生成
+                structured_data = script.get("structured_data")
+                style_requirements = script.get("style_requirements", "")
+                style_reference_info = script.get("style_reference_info", "")
+
+                for i in range(max_images):
+                    try:
+                        # 为每个图像创建变体prompt
+                        if i > 0:
+                            # 第一张后的图像使用简单变体
+                            variations = [
+                                ", 不同角度视角",
+                                ", 构图调整",
+                                ", 细节变化",
+                                ", 表情变化",
+                                ", 光影变化"
+                            ]
+                            variation = variations[(i-1) % len(variations)]
+                            variant_prompt = optimized_prompt + variation
+                            logger.info(f"生成第 {i+1}/{max_images} 张图像，变体: {variation}")
+                        else:
+                            # 第一张图像使用原始prompt
+                            variant_prompt = optimized_prompt
+                            logger.info(f"生成第 {i+1}/{max_images} 张图像，原始prompt")
+
+                        # 单次调用生成一张图像
+                        image_url_result = volc_service.text_to_image(
+                            model=GENERATION_MODEL,
+                            prompt=variant_prompt,
+                            max_images=1,  # 每次只生成一张图片
+                            sequential_generation="disabled",  # 禁用组图模式
+                            stream=False  # 禁用流式模式以获取URL而不是流对象
+                        )
+
+                        if image_url_result:
+                            image_urls.append(image_url_result)
+                            logger.info(f"第 {i+1} 张图像生成成功")
+                        else:
+                            logger.warning(f"第 {i+1} 张图像生成失败，返回空URL")
+                            image_urls.append(None)
+
+                    except Exception as e:
+                        logger.error(f"生成第 {i+1} 张图像时发生错误: {e}")
+                        image_urls.append(None)
+
+                # 处理生成的图片URL列表
+                valid_image_urls = [url for url in image_urls if url is not None]
+
+            if len(valid_image_urls) > 0:
+                # 有有效图片，处理下载
+                logger.info(f"成功生成 {len(valid_image_urls)} 张备选图像")
+                generated_images = []
+
+                for i, image_url in enumerate(image_urls):
+                    if image_url is None:
+                        # 处理生成失败的图片
+                        generated_images.append({
+                            "image_option": i + 1,
+                            "status": "generation_failed",
+                            "error": "图片生成失败，返回空URL"
+                        })
+                        continue
+                    try:
+                        from utils.image_utils import download_image_from_url
+                        import time
+
+                        filename = f"scene_option_{i+1}_{int(time.time())}.png"
+                        # 根据段落索引动态生成章节目录 (chapter_001, chapter_002, etc.)
+                        chapter_number = segment_index + 1
+                        chapter_dir = f"chapter_{chapter_number:03d}"
+                        output_dir = f"{project_path}/chapters/{chapter_dir}/images"
+                        output_path = f"{output_dir}/{filename}"
+
+                        # 下载图像到本地
+                        local_path = await download_image_from_url(image_url, output_path)
+                        logger.info(f"备选图 {i+1} 已下载到本地: {local_path}")
+
+                        generated_images.append({
+                            "image_option": i + 1,  # 备选图编号
+                            "status": "success",
+                            "image_url": image_url,
+                            "local_path": local_path,
+                            "prompt_used": optimized_prompt
+                        })
+                    except Exception as e:
+                        logger.error(f"下载备选图 {i+1} 失败: {e}")
+                        generated_images.append({
+                            "image_option": i + 1,
+                            "status": "download_failed",
+                            "error": str(e)
+                        })
+
+                return {
+                    "scene_description": scene_description,
+                    "total_options": len(valid_image_urls),
+                    "generated_images": generated_images,
+                    "generation_type": "batch_selection",  # 标记为组图选择模式
+                    "prompt_used": optimized_prompt,
+                    "max_images_configured": max_images,
+                    "reference_image_used": reference_image_path or ""  # 记录使用的参考图片
+                }
+            else:
+                # 组图API只返回1张图片或返回单图，使用备用方案生成多张不同图片
+                if isinstance(image_urls, list):
+                    image_url = image_urls[0]  # 取第一张图片
+                else:
+                    image_url = image_urls
+
+                logger.warning(f"组图API只返回1张图片，启动备用方案生成 {max_images} 张不同图片")
+
+                generated_images = []
+                max_attempts = max_images * 2  # 增加最大尝试次数，确保能生成足够的图片
+                attempt_count = 0
+
+                # 生成多张不同的图片，带有重试机制
+                while len([img for img in generated_images if img["status"] == "success"]) < max_images and attempt_count < max_attempts:
+                    i = len([img for img in generated_images if img["status"] == "success"])
+
+                    try:
+                        attempt_count += 1
+                        logger.info(f"第 {attempt_count} 次尝试生成备选图 {i+1}/{max_images}")
+
+                        if i == 0 and reference_image_path:
+                            # 第一张图片使用参考图生成
+                            logger.info(f"生成备选图 {i+1}/{max_images}，使用前情提要图片参考")
+                            variant_url = volc_service.multi_reference_text_to_image(
+                                model=GENERATION_MODEL,
+                                prompt=optimized_prompt,
+                                reference_images=[reference_image_path],
+                                max_images=1
+                            )
+                        else:
+                            # 为每张图片生成略有不同的prompt
+                            variant_prompt = self._create_variant_prompt(optimized_prompt, i, max_images)
+
+                            logger.info(f"生成备选图 {i+1}/{max_images}，使用变体prompt")
+
+                            variant_url = volc_service.text_to_image(
+                                model=GENERATION_MODEL,
+                                prompt=variant_prompt,
+                                max_images=1,  # 每次只生成1张
+                                stream=False
+                            )
+
+                        if isinstance(variant_url, list):
+                            variant_url = variant_url[0] if variant_url else None
+
+                        if variant_url:
+                            from utils.image_utils import download_image_from_url
+                            import time
+
+                            filename = f"scene_option_{i+1}_{int(time.time())}.png"
+                            # 根据段落索引动态生成章节目录 (chapter_001, chapter_002, etc.)
+                            chapter_number = segment_index + 1
+                            chapter_dir = f"chapter_{chapter_number:03d}"
+                            output_dir = f"{project_path}/chapters/{chapter_dir}/images"
+                            output_path = f"{output_dir}/{filename}"
+
+                            # 下载图像到本地
+                            local_path = await download_image_from_url(variant_url, output_path)
+                            logger.info(f"备选图 {i+1} 已下载到本地: {local_path}")
+
+                            generated_images.append({
+                                "image_option": i + 1,
+                                "status": "success",
+                                "image_url": variant_url,
+                                "local_path": local_path,
+                                "prompt_used": variant_prompt if 'variant_prompt' in locals() else optimized_prompt
+                            })
+                        else:
+                            logger.error(f"备选图 {i+1} 生成失败，返回空URL (尝试 {attempt_count}/{max_attempts})")
+                            if attempt_count < max_attempts:  # 只有还有尝试机会时才添加失败记录
+                                generated_images.append({
+                                    "image_option": i + 1,
+                                    "status": "generation_failed",
+                                    "error": "Empty URL returned"
+                                })
+
+                    except Exception as e:
+                        logger.error(f"备选图 {i+1} 生成失败 (尝试 {attempt_count}/{max_attempts}): {e}")
+                        if attempt_count < max_attempts:  # 只有还有尝试机会时才添加失败记录
+                            generated_images.append({
+                                "image_option": i + 1,
+                                "status": "generation_failed",
+                                "error": str(e)
+                            })
+
+                        # 如果是网络或API错误，等待一段时间再重试
+                        if "network" in str(e).lower() or "connection" in str(e).lower() or "timeout" in str(e).lower():
+                            import asyncio
+                            await asyncio.sleep(2)  # 等待2秒后重试
+
+                # 过滤掉失败的记录，只保留成功的图片
+                successful_images = [img for img in generated_images if img["status"] == "success"]
+
+                # 如果成功图片数量不足，填充占位图片
+                while len(successful_images) < max_images:
+                    placeholder_index = len(successful_images) + 1
+                    logger.warning(f"无法生成足够的图片，使用占位图片 {placeholder_index}/{max_images}")
+                    successful_images.append({
+                        "image_option": placeholder_index,
+                        "status": "placeholder",
+                        "image_url": "/placeholder-image.png",
+                        "local_path": "/placeholder-image.png",
+                        "prompt_used": "占位图片",
+                        "error": f"生成失败，使用占位图片"
+                    })
+
+                logger.info(f"备用方案完成，成功生成 {len(successful_images)} 张图片 (共尝试 {attempt_count} 次)")
+
+                return {
+                    "scene_description": scene_description,
+                    "total_options": len(successful_images),
+                    "generated_images": successful_images,
+                    "generation_type": "fallback_multi_generation",  # 标记为备用多次生成模式
+                    "prompt_used": optimized_prompt,
+                    "max_images_configured": max_images,
+                    "reference_image_used": reference_image_path or "",  # 记录使用的参考图片
+                    "total_attempts": attempt_count  # 记录总尝试次数
+                }
+
+        except Exception as e:
+            logger.error(f"场景图像生成失败: {e}")
+            return {
+                "scene_description": scene_description,
+                "total_options": 0,
+                "generated_images": [],
+                "error": str(e),
+                "generation_type": "failed"
+            }
+
+    def _optimize_scene_description(self, description: str, script: Dict[str, Any], project_path: str = "", reference_image_path: str = "") -> str:
         """
-        编辑现有图像，支持base64上传。
+        优化场景描述，使用清晰的数据优先级避免信息冲突
+
+        优先级规则：
+        1. 用户编辑的文本 (description) - 最高优先级
+        2. 用户选定的角色 (characters) - 次高优先级
+        3. AI分析的结构化数据 - 仅作为补充，不与用户输入冲突
+        4. 前情提要 - 独立的连贯性信息
 
         Args:
-            original_image_path: 本地原始图像的路径。
-            edit_prompt: 编辑指令。
-            output_dir: 输出目录，如果为None则使用默认临时目录。
+            description: 用户编辑的原始场景描述 (最高优先级)
+            script: 包含结构化数据、角色选择等的脚本
+            project_path: 项目路径，用于获取角色参考信息
 
         Returns:
-            编辑后图像的本地路径。
+            优化后的图像生成prompt
+        """
+        try:
+            # 获取输入数据
+            structured_data = script.get("structured_data")
+            selected_characters = script.get("characters", [])
+            style_requirements = script.get("style_requirements", "")
+
+            # 获取角色参考信息
+            character_references = {}
+            if selected_characters and project_path:
+                character_references = self._get_character_references(project_path, selected_characters)
+
+            # 获取风格参考图片信息
+            reference_images = script.get("reference_images", [])
+            style_reference_info = ""
+            if reference_images and project_path:
+                style_reference_info = "参考上传的画风图片进行风格渲染"
+
+            # 获取前情提要图片信息
+            previous_context = script.get("previous_context", "")
+            continuity_info = ""
+            reference_image_path = None
+
+            # 检查前情提要是否为图片路径
+            if previous_context:
+                import os
+
+                # 处理项目相对路径 (如 /projects/2025.10.25_11.48_勇者斗恶龙/...)
+                image_path = None
+                if previous_context.startswith("/projects/"):
+                    # 将项目相对路径转换为绝对路径
+                    # 格式: /projects/项目名/子路径 -> 当前工作目录/projects/项目名/子路径
+                    relative_path = previous_context[1:]  # 去掉开头的 /
+                    image_path = os.path.join(os.getcwd(), relative_path)
+                    logger.info(f"转换项目相对路径: {previous_context} -> {image_path}")
+                elif os.path.isfile(previous_context):
+                    # 直接是文件系统路径
+                    image_path = previous_context
+
+                if image_path and os.path.isfile(image_path):
+                    # 前情提要是一个有效的图片文件路径
+                    reference_image_path = image_path  # 使用绝对路径
+                    continuity_info = f"保持与前情提要的剧情连贯性，严格参考上一段画面的风格、角色外观和场景布局"
+                    logger.info(f"检测到前情提要图片参考: {reference_image_path}")
+                else:
+                    # 前情提要只是文字描述或路径无效
+                    continuity_info = f"保持与前情提要的剧情连贯性，参考上一段画面"
+                    logger.info(f"前情提要是文字描述或无效路径: {previous_context[:50]}...")
+
+            # 初始化各个部分
+            core_scene = []      # 核心情节描述 (用户编辑的文本)
+            character_info = []  # 角色信息 (用户选择的角色)
+            scene_supplement = [] # 场景补充信息 (AI分析，仅当需要时)
+            visual_elements = [] # 视觉元素 (AI分析)
+            style_info = []      # 风格信息
+
+            # 1. 核心情节描述 - 优先使用用户编辑的文本
+            if description and description.strip():
+                # 用户编辑的文本作为核心内容
+                core_scene.append(description.strip())
+                logger.info(f"使用用户编辑的文本作为核心情节: {len(description)} 字符")
+            elif structured_data and "content" in structured_data:
+                # 只有在用户没有编辑文本时，才使用AI分析的内容
+                ai_content = structured_data["content"]
+                core_scene.append(ai_content)
+                logger.info(f"使用AI分析的内容作为核心情节: {len(ai_content)} 字符")
+
+            # 2. 角色信息 - 优先使用用户选择的角色
+            if selected_characters:
+                for char_name in selected_characters:
+                    if char_name in character_references:
+                        char_ref = character_references[char_name]
+                        # 添加角色名称和描述
+                        char_desc = char_ref.get("description", "")
+                        if char_desc:
+                            character_info.append(f"{char_name}: {char_desc}")
+
+                        # 添加角色特征标签
+                        traits = char_ref.get("traits", [])
+                        if traits:
+                            character_info.append(f"{char_name}特征: {', '.join(traits[:3])}")
+
+                        # 添加角色卡信息（如果有）
+                        character_card = char_ref.get("character_card", {})
+                        if character_card:
+                            appearance = character_card.get("appearance", "")
+                            personality = character_card.get("personality", "")
+                            if appearance:
+                                character_info.append(f"{char_name}外观: {appearance}")
+                            if personality:
+                                character_info.append(f"{char_name}性格: {personality}")
+                    else:
+                        # 如果没有角色参考信息，至少添加角色名
+                        character_info.append(char_name)
+
+            # 2.1. 优化群体角色描述处理
+            character_info = self._optimize_group_character_descriptions(structured_data, character_info)
+
+            # 3. 场景补充信息 - 始终使用AI分析数据来增强一致性
+            if structured_data:
+                # 使用AI分析的场景设定
+                if "scene_setting" in structured_data:
+                    scene_setting = structured_data["scene_setting"]
+                    scene_supplement.append(f"环境: {scene_setting}")
+
+                # 添加环境元素（增加数量）
+                if "scene_elements" in structured_data:
+                    env_elements = structured_data["scene_elements"]
+                    if isinstance(env_elements, list):
+                        scene_supplement.extend(env_elements[:4])  # 增加到4个环境元素
+                    else:
+                        scene_supplement.append(env_elements)
+
+                # 添加关键事件信息（新）
+                if "key_events" in structured_data:
+                    key_events = structured_data["key_events"]
+                    if isinstance(key_events, list):
+                        scene_supplement.extend([f"事件: {event}" for event in key_events[:2]])
+                    else:
+                        scene_supplement.append(f"事件: {key_events}")
+
+            # 4. 视觉元素和情感基调 - 从AI分析中提取（与用户输入不冲突）
+            if structured_data:
+                # 视觉关键词（增加数量）
+                if "visual_keywords" in structured_data:
+                    visual_keywords = structured_data["visual_keywords"]
+                    if isinstance(visual_keywords, list):
+                        visual_elements.extend(visual_keywords[:8])  # 增加到8个视觉关键词
+                    else:
+                        visual_elements.append(visual_keywords)
+
+                # 画面焦点
+                if "panel_focus" in structured_data:
+                    visual_elements.append(structured_data["panel_focus"])
+
+                # 情感基调
+                if "emotional_tone" in structured_data:
+                    visual_elements.append(f"情感基调: {structured_data['emotional_tone']}")
+
+                # 角色描述（新增）
+                if "character_descriptions" in structured_data:
+                    char_descriptions = structured_data["character_descriptions"]
+                    if isinstance(char_descriptions, dict):
+                        for char_name, description in list(char_descriptions.items())[:3]:  # 前3个角色描述
+                            visual_elements.append(f"{char_name}: {description}")
+
+            # 5. 风格信息
+            if style_requirements:
+                style_info.append(style_requirements)
+            if style_reference_info:
+                style_info.append(style_reference_info)
+
+            # 构建优化prompt - 按照优先级顺序
+            if structured_data:
+                optimized_parts = []
+
+                # 1. 核心情节描述 (最高优先级)
+                if core_scene:
+                    optimized_parts.append(f"核心情节: {'; '.join(core_scene)}")
+
+                # 2. 角色信息 (高优先级)
+                if character_info:
+                    optimized_parts.append(f"角色设定: {'; '.join(character_info[:3])}")  # 限制数量避免过长
+
+                # 3. 场景补充信息 (中等优先级，仅当需要时)
+                if scene_supplement:
+                    optimized_parts.append(f"场景环境: {'; '.join(scene_supplement[:4])}")  # 增加到4个
+
+                # 4. 视觉元素和情感 (中等优先级)
+                if visual_elements:
+                    optimized_parts.append(f"视觉风格: {'; '.join(visual_elements[:10])}")  # 增加到10个
+
+                # 5. 剧情连贯性 (前情提要)
+                if continuity_info:
+                    if reference_image_path:
+                        # 有图片参考时，连贯性信息优先级提高，并强调视觉一致性
+                        optimized_parts.append(f"视觉连贯性要求: {continuity_info}")
+                        logger.info("检测到图片参考，提升连贯性优先级")
+                    else:
+                        optimized_parts.append(continuity_info)
+
+                # 6. 风格要求 (用户指定)
+                if style_info:
+                    optimized_parts.append(f"艺术风格: {', '.join(style_info)}")
+
+                # 7. 基础风格和构图 (默认添加)
+                if reference_image_path:
+                    # 有图片参考时，更强调与参考图的一致性
+                    optimized_parts.extend([
+                        "**强制要求** 严格保持与参考图的角色外观、服装、发型、面部特征完全一致",
+                        "**强制要求** 保持完全相同的绘画风格、线条粗细、色彩饱和度和色调",
+                        "**强制要求** 保持相似的背景渲染风格和光影处理方式",
+                        "**强制要求** 保持相同的角色比例和身材特征",
+                        "漫画风格, 清晰线条, 精美构图, 统一艺术风格",
+                        "高质量渲染, 保持系列连贯性"
+                    ])
+                else:
+                    optimized_parts.extend([
+                        "漫画风格, 清晰线条, 精美构图, 统一艺术风格",
+                        "高质量渲染, 注意角色一致性"
+                    ])
+
+                optimized_prompt = ", ".join(optimized_parts)
+
+            else:
+                # 降级：没有结构化数据时的简单逻辑
+                # 使用用户编辑的文本作为主要描述
+                optimized_parts = [f"场景描述: {description}"]
+
+                # 添加选定的角色信息
+                if selected_characters:
+                    for char_name in selected_characters:
+                        if char_name in character_references:
+                            char_ref = character_references[char_name]
+                            char_desc = char_ref.get("description", "")
+                            if char_desc:
+                                optimized_parts.append(f"角色: {char_name} - {char_desc}")
+                        else:
+                            optimized_parts.append(f"角色: {char_name}")
+
+                # 添加风格要求
+                if style_requirements:
+                    optimized_parts.append(f"风格: {style_requirements}")
+                if style_reference_info:
+                    optimized_parts.append(style_reference_info)
+
+                # 添加前情提要
+                if continuity_info:
+                    optimized_parts.append(continuity_info)
+
+                # 基础风格
+                optimized_parts.extend(["漫画风格, 清晰线条", "高质量渲染"])
+
+                optimized_prompt = ", ".join(optimized_parts)
+
+            # 记录最终prompt长度和使用的策略
+            logger.info(f"生成优化prompt，长度: {len(optimized_prompt)} 字符")
+            logger.info(f"数据使用策略 - 用户文本: {'是' if core_scene else '否'}, "
+                       f"选定角色: {len(selected_characters)}个, "
+                       f"结构化数据: {'是' if structured_data else '否'}, "
+                       f"场景补充: {'是' if scene_supplement else '否'}")
+
+            # 6. 角色数量约束 - 确保生成的角色数量符合原文描述
+            character_count_constraints = self._extract_character_count_constraints(core_scene, structured_data, character_info)
+            if character_count_constraints:
+                # 添加数量约束到prompt中
+                optimized_parts.extend(character_count_constraints)
+                logger.info(f"添加角色数量约束: {character_count_constraints}")
+
+            # 记录最终prompt长度和使用的策略
+            logger.info(f"生成优化prompt，长度: {len(optimized_prompt)} 字符")
+            logger.info(f"数据使用策略 - 用户文本: {'是' if core_scene else '否'}, "
+                       f"选定角色: {len(selected_characters)}个, "
+                       f"结构化数据: {'是' if structured_data else '否'}, "
+                       f"场景补充: {'是' if scene_supplement else '否'}")
+
+            return optimized_prompt
+
+        except Exception as e:
+            logger.error(f"优化场景描述失败: {e}")
+            # 降级到最基础的描述
+            return f"场景描述: {description}, 漫画风格, 高质量渲染"
+
+    def _create_variant_prompt(self, base_prompt: str, variant_index: int, total_variants: int) -> str:
+        """
+        为生成多样性图片创建变体prompt
+
+        Args:
+            base_prompt: 基础prompt
+            variant_index: 当前变体索引 (0-based)
+            total_variants: 总变体数量
+
+        Returns:
+            变体prompt
+        """
+        try:
+            # 检查是否有前情提要参考图，如果有则优先保持风格一致性
+            has_reference = "**强制要求** " in base_prompt or "reference_image_path" in str(base_prompt)
+
+            if has_reference:
+                # 有前情提要时，使用更保守的变体策略，主要调整构图细节
+                conservative_variations = [
+                    # 构图微调（保持风格一致）
+                    ["构图微调: 略微调整画面布局", "构图微调: 优化人物位置", "构图微调: 调整视角角度"],
+                    # 细节丰富（保持风格一致）
+                    ["细节丰富: 增加背景层次", "细节丰富: 优化服装纹理", "细节丰富: 增强表情细节"],
+                    # 焦点变化（保持风格一致）
+                    ["焦点调整: 突出人物表情", "焦点调整: 强调动作细节", "焦点调整: 平衡前景背景"],
+                    # 情感表达（保持风格一致）
+                    ["情感表达: 丰富面部表情", "情感表达: 优化姿态语言", "情感表达: 增强眼神交流"]
+                ]
+
+                # 选择保守策略
+                strategy_index = variant_index % len(conservative_variations)
+                selected_strategy = conservative_variations[strategy_index]
+                variation_index_in_strategy = variant_index % len(selected_strategy)
+                variation = selected_strategy[variation_index_in_strategy]
+
+                # 为有参考图的变体添加风格一致性强调
+                consistency_prefix = "**保持风格一致** "
+                variation = f"{consistency_prefix} {variation}"
+
+            else:
+                # 没有前情提要时，使用适度变化策略
+                moderate_variations = [
+                    # 温和的视角变化
+                    ["视角: 标准视角", "视角: 略微仰视", "视角: 略微俯视"],
+                    # 光照微调
+                    ["光照: 自然光效", "光照: 柔和光效", "光照: 明亮光效"],
+                    # 构图调整
+                    ["构图: 居中构图", "构图: 三分法构图", "构图: 稳定构图"],
+                    # 细节侧重
+                    ["细节: 人物清晰", "细节: 环境丰富", "细节: 表情生动"]
+                ]
+
+                strategy_index = variant_index % len(moderate_variations)
+                selected_strategy = moderate_variations[strategy_index]
+                variation_index_in_strategy = variant_index % len(selected_strategy)
+                variation = selected_strategy[variation_index_in_strategy]
+
+            # 构建变体prompt，确保风格一致性要求在前
+            if has_reference:
+                # 有参考图时，在前面重复强调风格一致性
+                style_consistency = "**再次强调** 严格保持与前面画面的艺术风格、角色外观、色彩完全一致"
+                variant_prompt = f"{base_prompt}, {style_consistency}, {variation}"
+            else:
+                variant_prompt = f"{base_prompt}, {variation}"
+
+            # 确保prompt长度合理
+            if len(variant_prompt) > 400:
+                variant_prompt = variant_prompt[:397] + "..."
+
+            logger.info(f"创建变体prompt {variant_index+1}/{total_variants}: {variation}")
+
+            return variant_prompt
+
+        except Exception as e:
+            logger.error(f"创建变体prompt失败: {e}")
+            # 降级：添加安全的、保持风格一致性的变化
+            if "**强制要求** " in base_prompt:
+                # 有参考图时，使用最保守的变化
+                safe_variations = [
+                    "构图微调", "细节优化", "表情调整", "姿态优化"
+                ]
+                safe_variation = safe_variations[variant_index % len(safe_variations)]
+                return f"{base_prompt}, **保持风格一致** {safe_variation}"
+            else:
+                # 没有参考图时的安全变化
+                safe_variations = ["不同角度", "细节变化", "构图调整", "表情变化"]
+                safe_variation = safe_variations[variant_index % len(safe_variations)]
+                return f"{base_prompt}, {safe_variation}"
+
+    async def edit_image_with_prompt(self, image_url: str, edit_prompt: str, project_path: str) -> str:
+        """
+        使用提示词编辑图像
+
+        Args:
+            image_url: 原图像URL
+            edit_prompt: 编辑提示词
+            project_path: 项目路径
+
+        Returns:
+            编辑后的图像URL
         """
         if not volc_service.is_available():
             logger.error("图像编辑失败，因为火山引擎服务不可用。")
             return None
 
-        logger.info(f"准备使用 {EDIT_MODEL} 编辑图像: {original_image_path}...")
-
         try:
-            from ..utils.image_utils import encode_file_to_base64, download_image_from_url
-            import time
-            import os
+            logger.info(f"使用提示词编辑图像: {edit_prompt}")
 
-            # 将本地图片编码为base64
-            base64_image = encode_file_to_base64(original_image_path)
-            logger.info(f"图片已编码为base64，长度: {len(base64_image)}")
-
-            # 使用AI服务进行图生图
-            result_url = await volc_service.edit_image_with_base64(
+            # 调用图像编辑API
+            edited_url = volc_service.image_to_image(
+                model=EDIT_MODEL,
                 prompt=edit_prompt,
-                base64_image=base64_image,
-                model_preference=EDIT_MODEL
+                image_url=image_url
             )
 
-            if result_url and not result_url.startswith("placeholder://"):
-                # 下载编辑后的图片到本地
-                if output_dir is None:
-                    output_dir = f"{os.path.dirname(original_image_path)}"
-
-                filename = f"edited_{int(time.time())}.png"
-                output_path = f"{output_dir}/{filename}"
-
+            if edited_url:
+                # 下载编辑后的图像
                 try:
-                    local_path = await download_image_from_url(result_url, output_path)
-                    logger.info(f"图像编辑成功！编辑后的图片已保存到: {local_path}")
+                    from utils.image_utils import download_image_from_url
+                    import time
+
+                    filename = f"edited_{int(time.time())}.png"
+                    output_dir = f"{project_path}/chapters/chapter_001/images"
+                    output_path = f"{output_dir}/{filename}"
+
+                    local_path = await download_image_from_url(edited_url, output_path)
+                    logger.info(f"编辑后的图像已下载到本地: {local_path}")
+
                     return local_path
                 except Exception as e:
-                    logger.error(f"下载编辑后的图片失败: {e}")
-                    return result_url  # 返回URL作为备选
+                    logger.error(f"下载编辑图像失败: {e}")
+                    return None
             else:
-                logger.error(f"图像编辑失败，AI服务返回: {result_url}")
+                logger.error("图像编辑失败，返回空URL")
                 return None
 
         except Exception as e:
             logger.error(f"图像编辑过程出现异常: {e}")
             return None
 
+    def _extract_character_count_constraints(self, core_scene: str, structured_data: Dict[str, Any], character_info: List[str]) -> List[str]:
+        """
+        从文本和结构化数据中提取角色数量约束
+        确保AI生成的图像角色数量符合原文描述
+        """
+        constraints = []
+
+        try:
+            # 1. 从核心场景文本中提取数量信息
+            if core_scene:
+                # 查找数字量词
+                import re
+
+                # 匹配中文数字和阿拉伯数字
+                number_patterns = [
+                    r'(\d+|\d+个|一|二|三|四|五|六|七|八|九|十|十一|十二|十三|十四|十五|十六|十七|十八|十九|二十)(个)?',
+                    r'(一个|两个|三个|四个|五个|六个|七个|八个|九个|十个|十一个|十二个)'
+                ]
+
+                # 特殊角色匹配
+                special_patterns = [
+                    (r'山羊头', '山羊头'),
+                    (r'面具.*男', '面具男'),
+                    (r'年轻人', '年轻人'),
+                    (r'男女.*人', '人群'),
+                ]
+
+                # 提取数量约束
+                extracted_counts = {}
+
+                # 查找特殊角色数量
+                for pattern, char_type in special_patterns:
+                    matches = re.finditer(pattern, core_scene)
+                    for match in matches:
+                        # 检查前面是否有数量词
+                        start_pos = max(0, match.start() - 10)
+                        context = core_scene[start_pos:match.end()]
+
+                        # 查找数量词
+                        for num_pattern in number_patterns:
+                            num_match = re.search(num_pattern, context)
+                            if num_match:
+                                count_text = num_match.group(1)
+                                # 转换为数字
+                                count = self._convert_chinese_number(count_text)
+                                extracted_counts[char_type] = count
+                                break
+
+                # 2. 从结构化数据中提取角色信息
+                if structured_data and "characters_present" in structured_data:
+                    characters = structured_data["characters_present"]
+
+                    # 检查是否有"十个"相关的群体描述
+                    for char in characters:
+                        if "十" in str(char) or "10" in str(char):
+                            if "十个" in str(char):
+                                extracted_counts["人群"] = 10
+                            elif "十个沉睡" in str(char):
+                                extracted_counts["沉睡人群"] = 10
+
+                # 3. 根据提取的信息生成智能约束
+                if "山羊头" in extracted_counts:
+                    constraints.append(f"严格按照原文描述，{extracted_counts['山羊头']}个山羊头")
+                    logger.info(f"山羊头数量约束: 严格按原文{extracted_counts['山羊头']}个")
+                elif "面具男" in extracted_counts:
+                    constraints.append(f"严格按照原文描述，{extracted_counts['面具男']}个面具角色")
+                    logger.info(f"面具男数量约束: 严格按原文{extracted_counts['面具男']}个")
+
+                if "人群" in extracted_counts:
+                    constraints.append(f"严格按照原文描述，总共{extracted_counts['人群']}个角色")
+                    logger.info(f"人群数量约束: 严格按原文{extracted_counts['人群']}个")
+                elif "沉睡人群" in extracted_counts:
+                    constraints.append(f"严格按照原文描述，{extracted_counts['沉睡人群']}个沉睡的角色")
+                    logger.info(f"沉睡人群数量约束: 严格按原文{extracted_counts['沉睡人群']}个")
+
+                # 4. 智能角色一致性约束
+                constraints.append("严格保持原文中的角色数量和关系，不要增减角色数量")
+                constraints.append("确保每个角色都符合原文描述的外貌和状态")
+                logger.info("添加智能角色一致性约束")
+
+            return constraints
+
+        except Exception as e:
+            logger.error(f"提取角色数量约束失败: {e}")
+            return []
+
+    def _convert_chinese_number(self, num_text: str) -> int:
+        """将中文数字转换为阿拉伯数字"""
+        chinese_numbers = {
+            "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+            "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15,
+            "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20
+        }
+
+        # 移除量词
+        num_text = num_text.replace("个", "")
+
+        # 直接映射
+        if num_text in chinese_numbers:
+            return chinese_numbers[num_text]
+
+        # 尝试转换阿拉伯数字
+        try:
+            return int(num_text)
+        except ValueError:
+            return 1  # 默认值
+
+    def _optimize_group_character_descriptions(self, structured_data: Dict[str, Any], character_info: List[str]) -> List[str]:
+        """
+        优化群体角色描述，避免AI误解群体角色的数量
+        特别处理"十个沉睡的男男女女"这样的情况
+        """
+        try:
+            if not structured_data:
+                return character_info
+
+            # 检查角色列表中是否有群体描述
+            characters_present = structured_data.get("characters_present", [])
+            character_descriptions = structured_data.get("character_descriptions", {})
+
+            # 优化后的角色描述列表
+            optimized_character_info = []
+
+            # 处理每个角色
+            for char_name in characters_present:
+                # 检查是否是群体角色描述
+                if self._is_group_character_description(char_name):
+                    # 从群体描述中提取关键信息
+                    optimized_desc = self._process_group_character(char_name, character_descriptions.get(char_name, []))
+                    if optimized_desc:
+                        optimized_character_info.append(optimized_desc)
+                        logger.info(f"优化群体角色描述: {char_name} -> {optimized_desc}")
+                else:
+                    # 保留非群体角色的原有描述
+                    for info in character_info:
+                        if char_name in info:
+                            optimized_character_info.append(info)
+                            break
+
+            # 如果没有找到任何角色描述，添加基本信息
+            if not optimized_character_info:
+                if characters_present:
+                    # 添加第一个角色作为主要角色
+                    main_char = characters_present[0]
+                    optimized_character_info.append(f"主要角色: {main_char}")
+                logger.info("没有找到角色描述，使用基本信息")
+
+            return optimized_character_info
+
+        except Exception as e:
+            logger.error(f"优化群体角色描述失败: {e}")
+            return character_info
+
+    def _is_group_character_description(self, char_name: str) -> bool:
+        """判断是否是群体角色描述"""
+        group_indicators = [
+            "十个", "10个", "群体", "一群", "男男女女", "众人", "大家", "其他人",
+            "沉睡的", "围坐", "参与者", "成员"
+        ]
+        return any(indicator in str(char_name) for indicator in group_indicators)
+
+    def _process_group_character(self, group_desc: str, traits: List[str]) -> str:
+        """处理群体角色描述，提取关键信息"""
+        try:
+            # 提取数量信息
+            count = self._extract_group_count(group_desc)
+
+            # 提取状态信息（如沉睡、围坐等）
+            state = self._extract_group_state(group_desc)
+
+            # 构建优化的描述
+            if count and state:
+                return f"{count}个{state}的角色"
+            elif count:
+                return f"{count}个角色"
+            elif state:
+                return f"{state}的角色"
+            else:
+                return "多个角色"
+
+        except Exception as e:
+            logger.error(f"处理群体角色失败: {e}")
+            return group_desc
+
+    def _extract_group_count(self, text: str) -> str:
+        """从群体描述中提取数量"""
+        import re
+
+        # 匹配数量
+        count_patterns = [
+            r'(\d+)个',
+            r'(十|一|二|三|四|五|六|七|八|九|十)(个)?',
+            r'(十个|十个)'
+        ]
+
+        for pattern in count_patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+
+        return ""
+
+    def _extract_group_state(self, text: str) -> str:
+        """从群体描述中提取状态信息"""
+        state_patterns = [
+            "沉睡", "围坐", "站着", "坐着", "躺着", "苏醒", "昏迷",
+            "紧张", "害怕", "冷静", "兴奋", "悲伤"
+        ]
+
+        for state in state_patterns:
+            if state in text:
+                return state
+
+        return ""
+
 # 创建一个单例
-image_generator = ImageGenerator()
+image_generator = ImageGenerator()  # 强制重新加载 - Sat Oct 25 18:09:21 CST 2025

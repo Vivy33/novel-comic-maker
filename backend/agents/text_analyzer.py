@@ -8,13 +8,13 @@ import json
 import logging
 from typing import Dict, Any, List
 
-from ..services.ai_service import volc_service, AIService
+from services.ai_service import volc_service, AIService
 
 logger = logging.getLogger(__name__)
 
 # 定义模型端点
-LITE_MODEL = "doubao-seed-1-6-flash-250828"
-FLASH_MODEL = "doubao-seed-1-6-flash-250828"
+LITE_MODEL = "deepseek-v3-1-terminus"
+FLASH_MODEL = "deepseek-v3-1-terminus"
 
 class TextAnalyzer:
     """

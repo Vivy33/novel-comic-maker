@@ -26,7 +26,12 @@ class TextSegment:
         emotional_tone: str = "",
         visual_focus: str = "",
         position: int = 0,
-        estimated_panels: int = 1
+        estimated_panels: int = 1,
+        scene_elements: list = None,
+        visual_keywords: list = None,
+        character_descriptions: dict = None,
+        key_events: list = None,
+        panel_focus: str = ""
     ):
         self.content = content
         self.segment_type = segment_type
@@ -36,6 +41,13 @@ class TextSegment:
         self.visual_focus = visual_focus
         self.position = position
         self.estimated_panels = estimated_panels
+
+        # 新增的漫画导向字段
+        self.scene_elements = scene_elements or []
+        self.visual_keywords = visual_keywords or []
+        self.character_descriptions = character_descriptions or {}
+        self.key_events = key_events or []
+        self.panel_focus = panel_focus
 
         # 计算基本属性
         self.word_count = len(content.split())
@@ -83,8 +95,13 @@ class TextSegmenter:
         Returns:
             分段结果列表
         """
-        logger.info(f"开始漫画导向智能文本分段，总长度: {len(text)} 字符")
-        logger.info("使用deepseek-v3.1 + JSON Schema分段")
+        logger.info("🚀 ===== 开始文本分段流程 =====")
+        logger.info(f"📖 输入文本总长度: {len(text)} 字符")
+        logger.info(f"🎯 目标长度: {target_length}")
+        logger.info(f"🌐 语言: {language}")
+        logger.info(f"🔄 保持上下文: {preserve_context}")
+        logger.info("📋 使用 deepseek-v3.1 + JSON Schema 分段")
+        logger.info("🎨 将调用 _build_simple_schema_prompt")
 
         # 强制使用AI分段，无任何降级机制
         ai_segments = await self._ai_comic_segmentation_with_schema(text, target_length, language)
@@ -100,9 +117,14 @@ class TextSegmenter:
     ) -> List[TextSegment]:
         """使用JSON Schema进行漫画分段"""
         target_chars = 300
+        logger.info("🔧 开始调用 _ai_comic_segmentation_with_schema 方法")
+        logger.info(f"📏 目标字符数: {target_chars}")
+        logger.info(f"📝 输入文本长度: {len(text)} 字符")
 
         # 构建简化prompt
+        logger.info("📝 开始构建 _build_simple_schema_prompt")
         prompt = self._build_simple_schema_prompt(text, target_chars)
+        logger.info(f"✅ 构建完成，prompt长度: {len(prompt)} 字符")
 
         # 使用文本模型 + JSON Schema
         result = await self.ai_service.generate_text(
@@ -128,7 +150,12 @@ class TextSegmenter:
                     emotional_tone=segment_data.get("emotional_tone", ""),
                     visual_focus=segment_data.get("visual_focus", ""),
                     position=i,
-                    estimated_panels=1
+                    estimated_panels=1,
+                    scene_elements=segment_data.get("scene_elements", []),
+                    visual_keywords=segment_data.get("visual_keywords", []),
+                    character_descriptions=segment_data.get("character_descriptions", {}),
+                    key_events=segment_data.get("key_events", []),
+                    panel_focus=segment_data.get("panel_focus", "")
                 )
                 segments.append(segment)
 
@@ -137,16 +164,19 @@ class TextSegmenter:
     def _build_simple_schema_prompt(self, text: str, target_chars: int) -> str:
         """构建简化的JSON Schema prompt"""
         return f"""你是一位资深的漫画师，特别擅长构建冲突的剧情，请将以下小说文本分割成适合漫画表现的段落，引入适当的艺术加工，不要只切分原文。
+                **原文必须切成15到30段**
                 各个段落中指向人的代词，替换成人名。
                 段落之间剧情要连贯，并且突出核心剧情。
-                原文切成15到30段
 
 要求：
-- 为剧情人物生成合适的对话内容
+- **为剧情人物生成合适的对话内容**
 - 每个段落约{target_chars}字符（250-350字范围）
 - 保持语义完整性，不在重要情节中间切断
 - 优先在对话、场景转换处分段
 - 确保每个段落都有清晰的视觉表现力
+- 如果原文较短，可以通过增加细节描述、心理活动、环境描写等方式扩展内容达到目标段落数
+- **重要**：准确识别每个段落中的角色，包括角色名称和数量
+- **重要**：识别场景中的关键视觉元素和环境细节
 
 输出格式必须严格按照以下JSON Schema：
 {{
@@ -157,7 +187,14 @@ class TextSegmenter:
       "scene_setting": "场景描述",
       "characters": "角色1,角色2",
       "emotional_tone": "情感基调",
-      "visual_focus": "视觉焦点"
+      "visual_focus": "视觉焦点",
+      "scene_elements": ["环境元素1", "环境元素2"],
+      "visual_keywords": ["关键词1", "关键词2"],
+      "character_descriptions": {{
+        "角色名": ["特征描述1", "特征描述2"]
+      }},
+      "key_events": ["关键事件1"],
+      "panel_focus": "画面焦点建议"
     }}
   ]
 }}
@@ -194,7 +231,13 @@ class TextSegmenter:
                 "lighting_suggestion": segment.lighting_suggestion,
                 "color_palette_suggestion": segment.color_palette_suggestion,
                 "focus_characters": segment.focus_characters,
-                "panel_composition_notes": segment.panel_composition_notes
+                "panel_composition_notes": segment.panel_composition_notes,
+                # 新增的漫画导向字段
+                "scene_elements": segment.scene_elements,
+                "visual_keywords": segment.visual_keywords,
+                "character_descriptions": segment.character_descriptions,
+                "key_events": segment.key_events,
+                "panel_focus": segment.panel_focus
             }
             for segment in segments
         ]

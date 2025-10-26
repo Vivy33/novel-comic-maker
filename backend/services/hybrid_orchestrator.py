@@ -10,15 +10,15 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from ..workflows.text_compression import TextCompressionWorkflow
-from ..workflows.feedback_handler import FeedbackWorkflow
-from ..agents.text_segmenter import text_segmenter
-from ..agents.coherence_checker import coherence_checker
-from ..agents.quality_assessor import quality_assessor
-from ..agents.character_consistency_agent import character_consistency_agent
-from ..agents.scene_composer import scene_composer
-from ..services.ai_service import AIService
-from ..services.file_system import ProjectFileSystem
+from workflows.text_compression import TextCompressionWorkflow
+from workflows.feedback_handler import FeedbackWorkflow
+from agents.text_segmenter import text_segmenter
+from agents.coherence_checker import coherence_checker
+from agents.quality_assessor import quality_assessor
+from agents.character_consistency_agent import character_consistency_agent
+from agents.scene_composer import scene_composer
+from services.ai_service import AIService
+from services.file_system import ProjectFileSystem
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ class HybridOrchestrator:
         """文本分析"""
         logger.info("分析文本...")
 
-        from ..agents.text_analyzer import text_analyzer
+        from agents.text_analyzer import text_analyzer
         analysis_result = await text_analyzer.analyze(text)
 
         # 保存分析结果
@@ -195,7 +195,7 @@ class HybridOrchestrator:
         """生成漫画脚本"""
         logger.info("生成漫画脚本...")
 
-        from ..agents.script_generator import script_generator
+        from agents.script_generator import script_generator
         comic_script = await script_generator.generate(text_analysis)
 
         # 保存脚本
@@ -253,7 +253,7 @@ class HybridOrchestrator:
                 if scene_result['status'] == 'success':
                     # 生成图像
                     image_prompt = scene_result['generation_prompt']
-                    image_url = await self.ai_service.text_to_image("doubao-seedream-4.0", image_prompt)
+                    image_url = await self.ai_service.text_to_image("doubao-seedream-4-0-250828", image_prompt)
 
                     # 保存图像
                     if image_url:

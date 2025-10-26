@@ -476,22 +476,22 @@ class BatchProcessor:
     # 默认任务处理器
     async def _handle_text_generation(self, task_data: Dict[str, Any]) -> str:
         """处理文本生成任务"""
-        from ..services.ai_service import AIService
+        from services.ai_service import AIService
         ai_service = AIService()
 
         prompt = task_data.get('prompt', '')
         model = task_data.get('model', 'seedream')
-        max_tokens = task_data.get('max_tokens', 1000)
+        max_tokens = task_data.get('max_tokens', 32768)
 
         return await ai_service.generate_text(prompt, model, max_tokens)
 
     async def _handle_image_generation(self, task_data: Dict[str, Any]) -> str:
         """处理图像生成任务"""
-        from ..services.ai_service import AIService
+        from services.ai_service import AIService
         ai_service = AIService()
 
         prompt = task_data.get('prompt', '')
-        model = task_data.get('model', 'doubao-seedream-4.0')
+        model = task_data.get('model', 'doubao-seedream-4-0-250828')
         size = task_data.get('size', '1024x1024')
 
         return await ai_service.text_to_image(model, prompt, size)

@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from enum import Enum
 
-from ..services.ai_service import AIService
+from services.ai_service import AIService
 
 logger = logging.getLogger(__name__)
 
@@ -484,7 +484,7 @@ class QualityAssessor:
             ai_result = await self.ai_service.generate_text(
                 prompt=assessment_prompt,
                 model_preference="seedream",
-                max_tokens=1500,
+                max_tokens=8000,
                 temperature=0.2
             )
 

@@ -12,8 +12,8 @@ from typing import Dict, Any, List
 from datetime import datetime
 import re
 
-from ..services.ai_service import AIService
-from ..services.character_consistency import (
+from services.ai_service import AIService
+from services.character_consistency import (
     CharacterConsistencyManager, CharacterProfile
 )
 
@@ -224,7 +224,7 @@ class CharacterConsistencyAgent:
             result = await self.ai_service.generate_text(
                 prompt=extraction_prompt,
                 model_preference="seedream",
-                max_tokens=2000,
+                max_tokens=8000,
                 temperature=0.2
             )
 
@@ -375,7 +375,7 @@ class CharacterConsistencyAgent:
             result = await self.ai_service.generate_text(
                 prompt=feature_prompt,
                 model_preference="seedream",
-                max_tokens=1000,
+                max_tokens=8000,
                 temperature=0.2
             )
 
@@ -457,7 +457,7 @@ class CharacterConsistencyAgent:
             result = await self.ai_service.generate_text(
                 prompt=performance_prompt,
                 model_preference="seedream",
-                max_tokens=1000,
+                max_tokens=8000,
                 temperature=0.2
             )
 
@@ -643,7 +643,7 @@ class CharacterConsistencyAgent:
             result = await self.ai_service.generate_text(
                 prompt=correction_prompt,
                 model_preference="seedream",
-                max_tokens=1000,
+                max_tokens=8000,
                 temperature=0.3
             )
 

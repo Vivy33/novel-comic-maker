@@ -4,7 +4,7 @@ Comic Management API Routes
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request, File, UploadFile, Form
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -343,3 +343,205 @@ async def get_project_characters(
     except Exception as e:
         logger.error(f"获取项目角色失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取项目角色失败: {str(e)}")
+
+
+# 封面生成API
+@router.post("/{project_id}/generate-cover", response_model=Dict[str, Any])
+async def generate_comic_cover(
+    project_id: str,
+    cover_type: str = Form(..., description="封面类型: project 或 chapter"),
+    novel_filename: Optional[str] = Form(None, description="小说文件名（当cover_type为chapter时必需）"),
+    cover_prompt: str = Form("", description="封面描述"),
+    cover_size: str = Form("1024x1024", description="封面尺寸"),
+    reference_image: Optional[UploadFile] = File(None, description="参考图片文件"),
+    fs: ProjectFileSystem = Depends(get_file_system),
+    comic_service: ComicService = Depends(get_comic_service)
+):
+    """
+    生成漫画封面
+    Generate comic cover
+    """
+    try:
+        logger.info(f"开始生成项目 {project_id} 的封面，类型: {cover_type}")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 验证封面类型
+        if cover_type not in ["project", "chapter"]:
+            raise HTTPException(status_code=400, detail="封面类型必须是 'project' 或 'chapter'")
+
+        # 如果是章节封面，验证小说文件名
+        if cover_type == "chapter" and (not novel_filename or (isinstance(novel_filename, str) and novel_filename.strip() == "")):
+            raise HTTPException(status_code=400, detail="章节封面需要提供小说文件名")
+
+        # 调用封面生成服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        result = await cover_service.generate_cover(
+            project_id=project_id,
+            cover_type=cover_type,
+            novel_filename=novel_filename,
+            cover_prompt=cover_prompt,
+            cover_size=cover_size,
+            reference_image=reference_image,
+            file_system=fs,
+            comic_service=comic_service
+        )
+
+        logger.info(f"封面生成完成: {result['cover_id']}")
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"生成封面失败: {e}")
+        raise HTTPException(status_code=500, detail=f"生成封面失败: {str(e)}")
+
+
+@router.get("/{project_id}/covers")
+async def get_project_covers(
+    project_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    获取项目封面列表
+    Get project covers list
+    """
+    try:
+        logger.info(f"获取项目 {project_id} 的封面列表")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 调用封面生成服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        covers = cover_service.get_project_covers(project_id, fs)
+
+        return {
+            "success": True,
+            "covers": covers
+        }
+
+    except Exception as e:
+        logger.error(f"获取封面列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取封面列表失败: {str(e)}")
+
+
+@router.delete("/{project_id}/covers/{cover_id}")
+async def delete_cover(
+    project_id: str,
+    cover_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    删除项目封面
+    Delete project cover
+    """
+    try:
+        logger.info(f"删除项目 {project_id} 的封面 {cover_id}")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 调用封面服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        result = cover_service.delete_cover(project_id, cover_id, fs)
+
+        return {
+            "success": True,
+            "message": f"封面 {cover_id} 删除成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除封面失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除封面失败: {str(e)}")
+
+
+@router.put("/{project_id}/covers/{cover_id}/set-primary")
+async def set_primary_cover(
+    project_id: str,
+    cover_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    设置主要封面
+    Set primary cover
+    """
+    try:
+        logger.info(f"设置项目 {project_id} 的主要封面 {cover_id}")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 调用封面服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        result = cover_service.set_primary_cover(project_id, cover_id, fs)
+
+        return {
+            "success": True,
+            "message": f"封面 {cover_id} 已设置为主要封面",
+            "primary_cover": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置主要封面失败: {e}")
+        raise HTTPException(status_code=500, detail=f"设置主要封面失败: {str(e)}")
+
+
+@router.get("/{project_id}/covers/{cover_id}")
+async def get_cover_details(
+    project_id: str,
+    cover_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    获取封面详细信息
+    Get cover details
+    """
+    try:
+        logger.info(f"获取项目 {project_id} 封面 {cover_id} 的详细信息")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 调用封面服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        cover = await cover_service.get_cover_details(project_id, cover_id, fs)
+
+        if not cover:
+            raise HTTPException(status_code=404, detail="封面不存在")
+
+        return {
+            "success": True,
+            "cover": cover
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取封面详情失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取封面详情失败: {str(e)}")

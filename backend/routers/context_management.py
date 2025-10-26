@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import logging
 
-from ..services.ai_service import AIService
+from services.ai_service import AIService
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class CreateContextRequest(BaseModel):
 class GenerateTextRequest(BaseModel):
     """文本生成请求"""
     prompt: str = Field(..., min_length=1, max_length=10000, description="提示词")
-    model_preference: str = Field("doubao-seed-1-6-flash-250828", description="模型偏好")
+    model_preference: str = Field("deepseek-v3-1-terminus", description="模型偏好")
     temperature: float = Field(0.7, ge=0.0, le=2.0, description="温度参数")
     use_json_schema: bool = Field(False, description="是否使用JSON Schema")
     schema_type: Optional[str] = Field(None, description="Schema类型")
@@ -43,7 +43,7 @@ class GenerateTextWithContextRequest(BaseModel):
     """带上下文的文本生成请求"""
     prompt: str = Field(..., min_length=1, max_length=10000, description="提示词")
     system_prompt: Optional[str] = Field(None, description="系统提示词")
-    model_preference: str = Field("doubao-seed-1-6-flash-250828", description="模型偏好")
+    model_preference: str = Field("deepseek-v3-1-terminus", description="模型偏好")
     temperature: float = Field(0.7, ge=0.0, le=2.0, description="温度参数")
     context_id: Optional[str] = Field(None, description="上下文ID")
     clear_context: bool = Field(False, description="是否清空上下文")
@@ -52,14 +52,14 @@ class GenerateTextWithContextRequest(BaseModel):
 class TextAnalysisRequest(BaseModel):
     """文本分析请求"""
     text: str = Field(..., min_length=10, max_length=50000, description="待分析的文本")
-    model_preference: str = Field("doubao-seed-1-6-flash-250828", description="模型偏好")
+    model_preference: str = Field("deepseek-v3-1-terminus", description="模型偏好")
     context_id: Optional[str] = Field(None, description="上下文ID")
 
 
 class CharacterAnalysisRequest(BaseModel):
     """角色分析请求"""
     text: str = Field(..., min_length=10, max_length=50000, description="待分析的文本")
-    model_preference: str = Field("doubao-seed-1-6-flash-250828", description="模型偏好")
+    model_preference: str = Field("deepseek-v3-1-terminus", description="模型偏好")
     context_id: Optional[str] = Field(None, description="上下文ID")
 
 
@@ -67,7 +67,7 @@ class ScriptGenerationRequest(BaseModel):
     """脚本生成请求"""
     text_analysis: Dict[str, Any] = Field(..., description="文本分析结果")
     style_requirements: Optional[str] = Field(None, description="风格要求")
-    model_preference: str = Field("doubao-seed-1-6-flash-250828", description="模型偏好")
+    model_preference: str = Field("deepseek-v3-1-terminus", description="模型偏好")
     context_id: Optional[str] = Field(None, description="上下文ID")
 
 

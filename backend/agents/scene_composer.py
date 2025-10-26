@@ -11,8 +11,8 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from ..services.ai_service import AIService
-from ..agents.character_consistency_agent import CharacterConsistencyAgent
+from services.ai_service import AIService
+from agents.character_consistency_agent import CharacterConsistencyAgent
 
 logger = logging.getLogger(__name__)
 
@@ -175,41 +175,48 @@ class SceneComposer:
         try:
             # 构建场景分析提示词
             analysis_prompt = f"""
-请分析以下漫画分镜脚本的场景要素：
+你是专业的漫画场景分析师。请分析以下分镜的核心要素，确保角色一致性和画面精准性。
 
+**分镜信息**
 场景描述：{scene_description}
 对话：{dialogue}
 旁白：{narration}
 
-请分析：
-1. 场景类型（室内/室外/具体场所）
-2. 情感基调
-3. 主要动作和事件
-4. 视角和构图要求
-5. 时间和氛围
-6. 关键视觉元素
+**分析要求**
+1. **场景识别**：具体场所类型（室内/室外/特定地点）
+2. **情感基调**：主要情绪氛围（紧张/温馨/悬疑等）
+3. **角色动作**：可视觉化的具体行为
+4. **构图要求**：
+   - 视角：全景/中景/特写
+   - 焦点：主要角色或关键物品
+   - 层次：前景/中景/背景安排
+5. **时间氛围**：时间段、光线、色调
+6. **关键元素**：必须出现在画面中的重要物品
 
-请以JSON格式返回：
+**输出格式**
 {{
-    "scene_type": "场景类型",
-    "emotional_tone": "情感基调",
-    "main_actions": ["主要动作列表"],
+    "scene_type": "具体场景类型",
+    "emotional_tone": "主要情感基调",
+    "main_actions": ["可视觉化的动作列表"],
     "composition_requirements": {{
-        "perspective": "视角要求",
-        "framing": "构图要求",
-        "focus_point": "焦点"
+        "perspective": "视角建议(全景/中景/特写)",
+        "framing": "构图方式(中心/黄金分割/对角线)",
+        "focus_point": "主要焦点对象"
     }},
-    "time_setting": "时间设定",
-    "atmosphere": "氛围描述",
-    "key_visual_elements": ["关键视觉元素"]
+    "time_setting": "时间和光线条件",
+    "atmosphere": "整体氛围描述",
+    "key_visual_elements": ["必须包含的关键视觉元素"],
+    "color_palette": ["建议的色调"],
+    "lighting_style": "光线风格"
 }}
-"""
+
+请确保分析结果便于后续图像生成，避免抽象描述。"""
 
             # 调用AI服务
             result = await self.ai_service.generate_text(
                 prompt=analysis_prompt,
                 model_preference="seedream",
-                max_tokens=800,
+                max_tokens=8000,
                 temperature=0.3
             )
 
@@ -345,7 +352,7 @@ class SceneComposer:
             result = await self.ai_service.generate_text(
                 prompt=background_prompt,
                 model_preference="seedream",
-                max_tokens=800,
+                max_tokens=8000,
                 temperature=0.4
             )
 

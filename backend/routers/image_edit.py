@@ -13,10 +13,10 @@ import logging
 import os
 from datetime import datetime
 
-from ..services.ai_service import AIService
-from ..services.file_system import ProjectFileSystem
-from ..config import settings
-from ..utils.image_utils import (
+from services.ai_service import AIService
+from services.file_system import ProjectFileSystem
+from config import settings
+from utils.image_utils import (
     encode_file_to_base64,
     encode_file,
     get_image_info,
@@ -102,8 +102,9 @@ async def edit_image_with_base64(
     prompt: str = Form(...),
     base64_image: str = Form(...),
     base64_mask: Optional[str] = Form(None),
-    model_preference: str = Form("qwen"),
+    model_preference: str = Form("doubao-seedream-4-0-250828"),
     size: str = Form("1024x1024"),
+    stream: bool = Form(True, description="是否启用流式输出"),
     ai_service: AIService = Depends(get_ai_service)
 ):
     """
@@ -153,8 +154,9 @@ async def edit_uploaded_image(
     prompt: str = Form(...),
     file: UploadFile = File(...),
     mask_file: Optional[UploadFile] = File(None),
-    model_preference: str = Form("qwen"),
+    model_preference: str = Form("doubao-seedream-4-0-250828"),
     size: str = Form("1024x1024"),
+    stream: bool = Form(True, description="是否启用流式输出"),
     ai_service: AIService = Depends(get_ai_service)
 ):
     """
@@ -359,6 +361,7 @@ async def image_to_image_generation(
     model_preference: str = Form("doubao-seedream-4-0-250828"),
     size: str = Form("1024x1024"),
     strength: float = Form(0.8),
+    stream: bool = Form(True, description="是否启用流式输出"),
     ai_service: AIService = Depends(get_ai_service)
 ):
     """

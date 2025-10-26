@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 import sys
+import asyncio
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -29,8 +30,33 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("启动小说生成漫画应用后端服务...")
     logger.info("Phase 2 功能已完成，基础服务运行中")
-    yield
-    logger.info("关闭小说生成漫画应用后端服务...")
+
+    # 启动临时文件清理任务
+    cleanup_task = None
+    try:
+        # 导入清理函数
+        from routers.image_edit import cleanup_temp_files, periodic_cleanup
+
+        # 启动后台清理任务
+        cleanup_task = asyncio.create_task(periodic_cleanup())
+        logger.info("临时文件定期清理任务已启动")
+
+    except Exception as e:
+        logger.warning(f"启动清理任务失败: {e}")
+
+    try:
+        yield
+    finally:
+        logger.info("关闭小说生成漫画应用后端服务...")
+
+        # 停止清理任务
+        if cleanup_task:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("临时文件清理任务已停止")
 
 
 # 创建FastAPI应用实例

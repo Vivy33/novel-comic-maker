@@ -8,12 +8,12 @@ import json
 import logging
 from typing import Dict, Any
 
-from ..services.ai_service import volc_service, AIService
+from services.ai_service import volc_service, AIService
 
 logger = logging.getLogger(__name__)
 
 # 定义模型端点
-FLASH_MODEL = "doubao-seed-1-6-flash-250828"
+FLASH_MODEL = "deepseek-v3-1-terminus"
 
 class ScriptGenerator:
     """
@@ -94,16 +94,37 @@ class ScriptGenerator:
         # 将分析数据转换为格式化的字符串，作为模型的输入
         analysis_summary = json.dumps(text_analysis, ensure_ascii=False, indent=2)
 
-        prompt = f"""你是一位专业的漫画编剧。请根据以下的小说分析报告，创作一份详细的漫画分镜脚本。
+        prompt = f"""你是一位专业的漫画编剧。请根据小说分析报告，创作1个核心场景描述。
 
-        请创作包含标题、分镜描述、对话和音效的漫画脚本。
+        **重要约束**
+        1. **单场景描述**：将整个段落浓缩为1个核心场景，包含完整情节
+        2. **字数控制**：总字数不超过300字，确保信息集中不分散
+        3. **优先级**：核心动作 > 角色情绪 > 场景氛围 > 环境细节
+        4. **视觉化要求**：所有描述必须是可直接图像化的内容
+
+        **场景描述要素**
+        - **核心情节**：本段的完整故事线（1句话概括）
+        - **场景环境**：具体地点、时间、光线、氛围
+        - **出场角色**：角色姓名+外貌特征锚点（发型、服装、配饰）
+        - **主要动作**：角色的核心可视化行为
+        - **情感表现**：通过表情、眼神、肢体展现的情绪
+        - **关键对话**：最重要的对话（1-2句，简洁有力）
+        - **构图建议**：推荐的景别（全景/中景/特写）
+
+        **输出格式**
+        {{
+          "title": "章节标题",
+          "scene_description": "[核心场景描述 - 包含上述所有要素，300字以内]",
+          "estimated_panels": 1,
+          "estimated_pages": 1
+        }}
 
         小说分析报告：
         ---
         {analysis_summary}
         ---
 
-        请确保分镜能够生动地展现故事情节和情感流动。"""
+        请创作1个完整、紧凑、适合图像生成的场景描述。"""
 
         # 使用JSON Schema强制输出格式
         try:

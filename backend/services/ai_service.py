@@ -303,8 +303,51 @@ class VolcengineService:
 
             # 流式或非流式调用
             if stream and "seedream-4-0-250828" in model.lower():
-                # 流式输出
-                return self.client.images.generate(**request_params)
+                # 流式输出 - 需要处理流式响应
+                resp = self.client.images.generate(**request_params)
+
+                # 流式响应需要迭代获取内容
+                try:
+                    # 如果resp是生成器，需要迭代获取最终结果
+                    if hasattr(resp, '__iter__') and not hasattr(resp, 'data'):
+                        final_result = None
+
+                        for chunk in resp:
+                            # 检查chunk是否有图像URL
+                            if hasattr(chunk, 'url') and chunk.url:
+                                final_result = chunk
+                                break
+                            elif hasattr(chunk, 'data') and chunk.data and len(chunk.data) > 0:
+                                final_result = chunk
+                                break
+
+                        if final_result:
+                            if hasattr(final_result, 'url') and final_result.url:
+                                image_url = final_result.url
+                                logger.info(f"成功从流式响应获取图像")
+                                return {"image_url": image_url, "local_path": None}
+                            elif hasattr(final_result, 'data') and len(final_result.data) > 0:
+                                image_url = final_result.data[0].url
+                                logger.info(f"成功从流式响应获取图像")
+                                return {"image_url": image_url, "local_path": None}
+                            else:
+                                logger.error(f"流式响应未找到有效图像数据")
+                                return None
+                        else:
+                            logger.error(f"流式响应迭代完成但未找到有效数据")
+                            return None
+                    else:
+                        # 直接处理响应对象
+                        if hasattr(resp, 'data') and len(resp.data) > 0:
+                            image_url = resp.data[0].url
+                            logger.info(f"成功接收到文生图模型 {model} 的流式响应。")
+                            return {"image_url": image_url, "local_path": None}
+                        else:
+                            logger.error(f"流式请求失败，响应数据为空")
+                            return None
+                except Exception as e:
+                    logger.error(f"处理流式响应时出错: {e}")
+                    return None
             else:
                 # 非流式输出
                 resp = self.client.images.generate(**request_params)
@@ -320,16 +363,16 @@ class VolcengineService:
                 if sequential_generation == "auto" and "seedream-4-0-250828" in model.lower():
                     # 组图模式，返回多个URL
                     if hasattr(resp, 'data') and len(resp.data) > 1:
-                        # 多图响应
-                        image_urls = [image.url for image in resp.data]
-                        logger.info(f"成功接收到文生图模型 {model} 的组图响应，共 {len(image_urls)} 张图片。")
-                        return image_urls
+                        # 多图响应 - 返回第一个图片
+                        image_url = resp.data[0].url
+                        logger.info(f"成功接收到文生图模型 {model} 的组图响应，共 {len(resp.data)} 张图片，使用第一张。")
+                        return {"image_url": image_url, "local_path": None}
                     else:
                         # API可能返回单图，尝试获取单图URL
                         if hasattr(resp, 'data') and len(resp.data) > 0:
                             image_url = resp.data[0].url
                             logger.warning(f"组图请求但返回单图，模型: {model}，响应数据长度: {len(resp.data)}")
-                            return image_url
+                            return {"image_url": image_url, "local_path": None}
                         else:
                             logger.error(f"组图请求失败，响应数据为空")
                             return None
@@ -338,7 +381,7 @@ class VolcengineService:
                     if hasattr(resp, 'data') and len(resp.data) > 0:
                         image_url = resp.data[0].url
                         logger.info(f"成功接收到文生图模型 {model} 的单图响应。")
-                        return image_url
+                        return {"image_url": image_url, "local_path": None}
                     else:
                         logger.error(f"单图请求失败，响应数据为空")
                         return None
@@ -450,29 +493,144 @@ class VolcengineService:
                 except Exception as e:
                     logger.error(f"图生图API调用失败: {e}")
                     # 降级到普通文生图，但在prompt中描述参考图
-                    logger.info("降级到普通文生图，增强prompt描述")
-                    # 自动分析参考图内容并增强prompt
-                    if ref_path and ('蓝色' not in prompt or '宝蓝色' not in prompt):
-                        prompt += "，参考图显示的是蓝色长发角色"
-                    if ref_path and ('魔法' not in prompt or '巫师' not in prompt):
-                        prompt += "，魔法师风格服装"
+                    logger.info("🔄 图生图API失败，降级到增强版文生图模式")
 
-            logger.info(f"向多参考图模型 {model} 发送请求...")
+                    # 使用智能的参考图描述增强prompt
+                    enhanced_prompt = self._enhance_prompt_with_reference_description(prompt, ref_path)
+                    logger.info(f"✅ 已基于参考图增强prompt，新增描述长度: {len(enhanced_prompt) - len(prompt)} 字符")
 
-            # 调用API
-            resp = self.client.images.generate(**request_params)
+                    # 调用增强的文生图
+                    result = self.text_to_image(
+                        model=model,
+                        prompt=enhanced_prompt,
+                        size="1024x1024",
+                        response_format="url",
+                        watermark=False
+                    )
 
-            if hasattr(resp, 'data') and len(resp.data) > 0:
-                image_url = resp.data[0].url
-                logger.info(f"成功接收到多参考图模型 {model} 的响应。")
-                return image_url
-            else:
-                logger.warning(f"多参考图模型返回空响应: {resp}")
-                return None
+                    if result:
+                        logger.info(f"✅ 降级模式生成成功，但仍建议检查图片一致性")
+                    else:
+                        logger.error(f"❌ 降级模式也失败了")
+
+                    return result
+        except Exception as e:
+            logger.error(f"多模态生成失败: {e}")
+            return None
+
+    def _enhance_prompt_with_reference_description(self, original_prompt: str, reference_image_path: str) -> str:
+        """
+        基于参考图片智能增强prompt，确保风格一致性
+        当图生图API失败时，通过文字描述尽量保持一致性
+        """
+        try:
+            import base64
+
+            # 读取参考图片
+            with open(reference_image_path, 'rb') as f:
+                image_data = f.read()
+
+            # 使用vision模型分析参考图片
+            vision_prompt = """
+            请分析这张漫画图片的内容，重点关注以下方面，用于保持漫画风格一致性：
+
+            1. **角色外观特征**：发型、发色、面部特征、服装款式和颜色
+            2. **绘画风格特征**：线条风格、色彩风格、渲染方式、整体艺术风格
+            3. **场景特征**：背景复杂度、构图方式、光影效果、氛围情绪
+
+            请用简洁但详细的方式描述这些关键特征，将用于指导下一张图片的生成，确保风格完全一致。
+            """
+
+            # 调用vision API分析图片（如果有相关功能）
+            try:
+                vision_result = self.vision_analyze_image(
+                    image_base64=base64.b64encode(image_data).decode('utf-8'),
+                    prompt=vision_prompt
+                )
+
+                if vision_result:
+                    # 基于分析结果增强prompt
+                    consistency_prompt = f"""
+                    **重要：风格一致性要求**
+                    基于参考图片分析：{vision_result}
+
+                    **强制要求**：
+                    1. 严格保持与参考图片相同的角色外观和服装
+                    2. 保持完全相同的绘画风格和线条处理方式
+                    3. 保持相同的色彩风格和配色方案
+                    4. 保持相似的构图和视觉表现力
+
+                    **原场景描述**：{original_prompt}
+                    """
+                    logger.info(f"✅ 成功分析参考图片并生成一致性prompt")
+                    return consistency_prompt
+
+            except Exception as vision_error:
+                logger.warning(f"🔄 Vision分析失败，使用通用一致性描述: {vision_error}")
+
+            # 降级到通用一致性描述
+            consistency_enhancement = """
+            **重要：风格一致性要求**
+            基于参考图片，确保以下一致性：
+            1. 严格保持相同的角色外观、发型、服装和配饰
+            2. 保持完全相同的漫画绘画风格和线条特征
+            3. 保持相同的色彩处理方式和整体色调
+            4. 保持相似的角色比例和身材特征
+            5. 保持相同的背景渲染风格和细节处理程度
+            """
+
+            enhanced_prompt = original_prompt + consistency_enhancement
+            logger.info(f"✅ 使用通用一致性描述增强prompt")
+            return enhanced_prompt
 
         except Exception as e:
-            logger.error(f"调用多参考图模型 {model} 失败: {e}")
-            return None
+            logger.error(f"❌ 智能prompt增强失败: {e}")
+            # 最基础的增强
+            return original_prompt + "，保持与前一张图片完全相同的角色外观和绘画风格"
+
+    def _extract_feature(self, analysis: str, keywords: list) -> str:
+        """从分析结果中提取特定关键词相关的描述"""
+        try:
+            sentences = analysis.split('。')
+            for sentence in sentences:
+                for keyword in keywords:
+                    if keyword in sentence:
+                        return sentence.strip()
+            return "特征描述未找到"
+        except:
+            return "特征提取失败"
+
+    def enhance_prompt_with_reference_description(self, original_prompt: str, reference_image_path: str) -> str:
+        """
+        基于参考图片智能增强prompt，确保风格一致性
+        当图生图API失败时，通过文字描述尽量保持一致性
+        """
+        try:
+            logger.info(f"🔄 开始基于参考图片增强prompt: {reference_image_path}")
+
+            # 降级到通用一致性描述
+            consistency_enhancement = """
+
+**重要：风格一致性要求**
+基于参考图片，确保以下一致性：
+1. 严格保持相同的角色外观、发型、服装和配饰
+2. 保持完全相同的漫画绘画风格和线条特征
+3. 保持相同的色彩处理方式和整体色调
+4. 保持相似的角色比例和身材特征
+5. 保持相同的背景渲染风格和细节处理程度
+
+**强制要求** 务必确保角色外观、服装、发型与参考图片完全一致
+**强制要求** 保持完全相同的绘画风格和色彩处理方式
+"""
+
+            enhanced_prompt = original_prompt + consistency_enhancement
+            logger.info(f"✅ 使用通用一致性描述增强prompt，长度: {len(enhanced_prompt)} 字符")
+            return enhanced_prompt
+
+        except Exception as e:
+            logger.error(f"❌ 智能prompt增强失败: {e}")
+            # 最基础的增强
+            return original_prompt + "，保持与前一张图片完全相同的角色外观和绘画风格"
 
 
 # 创建全局AI服务实例
@@ -499,6 +657,28 @@ class AIService:
 
     def is_available(self) -> bool:
         return self.provider.is_available()
+
+    def _parse_size(self, size: str) -> tuple[int, int]:
+        """
+        解析图像尺寸字符串，返回宽度和高度
+
+        Args:
+            size: 尺寸字符串，格式为 "宽x高"，如 "1024x1024"
+
+        Returns:
+            (width, height): 宽度和高度的元组
+        """
+        try:
+            if 'x' in size:
+                width, height = size.split('x')
+                return int(width), int(height)
+            else:
+                # 如果格式不正确，返回默认尺寸
+                logger.warning(f"无效的尺寸格式: {size}，使用默认尺寸 1024x1024")
+                return 1024, 1024
+        except (ValueError, AttributeError) as e:
+            logger.error(f"解析尺寸失败: {e}，使用默认尺寸 1024x1024")
+            return 1024, 1024
 
     def get_available_models(self) -> List[str]:
         return self.TEXT_MODELS + self.IMAGE_MODELS
@@ -918,15 +1098,13 @@ class AIService:
             - 非流式组图：返回URL列表
             - 流式模式：返回生成器对象
         """
-        width, height = self._parse_size(size)
         model = "doubao-seedream-4-0-250828" if "seedream" in model_preference else self.IMAGE_MODELS[0]
 
         if self.provider.is_available():
             result = self.provider.text_to_image(
                 model=model,
                 prompt=prompt,
-                width=width,
-                height=height,
+                size=size,
                 sequential_generation=sequential_generation,
                 max_images=max_images,
                 stream=stream
@@ -992,49 +1170,44 @@ class AIService:
         size: str = "1024x1024",
         stream: bool = True,
     ) -> str:
-        """使用base64图像进行编辑，返回结果URL或占位符。"""
-        width, height = self._parse_size(size)
+        """使用base64图像进行编辑，返回结果URL。"""
         model = "doubao-seedream-4-0-250828"
 
         if self.provider.is_available():
             try:
-                # 将base64图像保存为临时文件并通过临时服务器提供访问
-                from utils.image_utils import decode_base64_to_file
-                import tempfile
-                import threading
-                from http.server import SimpleHTTPRequestHandler
-                import socketserver
-                import time
+                logger.info(f"向图像编辑模型 {model} 发送请求...")
+                logger.info(f"使用base64图像输入，大小: {len(base64_image)} 字符")
 
-                # 创建临时文件保存base64图像
-                temp_dir = tempfile.mkdtemp()
-                temp_image_path = f"{temp_dir}/input_image.png"
-                decode_base64_to_file(base64_image, temp_image_path)
+                if base64_mask:
+                    logger.info(f"使用掩码图像编辑，掩码大小: {len(base64_mask)} 字符")
+                    # TODO: 实现掩码编辑逻辑
+                    # 目前暂时使用无掩码的图生图
+                    logger.warning("掩码编辑功能暂未实现，使用普通图生图")
 
-                # 启动一个简单的HTTP服务器来提供图像访问
-                # 注意：这是一个简化的实现，在生产环境中应该使用更robust的解决方案
-                import socket
-                import os
+                # 调用图生图API进行图像编辑
+                result_url = self.provider.image_to_image(
+                    model=model,
+                    prompt=prompt,
+                    image_url="",  # 空URL，因为我们使用base64
+                    image_base64=base64_image  # 传递base64数据
+                )
 
-                def find_free_port():
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.bind(('', 0))
-                        s.listen(1)
-                        port = s.getsockname()[1]
-                    return port
-
-                # 简化方案：直接尝试使用占位符URL，因为火山引擎可能支持直接上传
-                # 这是一个临时解决方案，实际应该实现文件上传服务
-                logger.warning("图生图功能需要公开可访问的图像URL，当前使用占位符URL")
-
-                # 由于火山引擎API限制，暂时返回占位符
-                return f"placeholder://edit/{width}x{height}/{int(time.time())}"
+                if result_url:
+                    logger.info(f"图像编辑成功: {result_url}")
+                    return result_url
+                else:
+                    logger.error("图像编辑返回空结果")
+                    raise Exception("图像编辑返回空结果")
 
             except Exception as e:
-                logger.error(f"处理base64图像失败: {e}")
-                return f"placeholder://edit/{width}x{height}/{int(time.time())}"
-
-        return f"placeholder://edit/{width}x{height}/{int(time.time())}"
+                logger.error(f"图像编辑失败: {e}")
+                # 降级处理 - 返回占位符
+                logger.warning("图像编辑失败，返回占位符")
+                return f"placeholder://edit-fallback-{int(time.time())}"
+        else:
+            # 降级返回占位符
+            logger.warning("火山引擎服务不可用，返回编辑占位符")
+            return f"placeholder://edit-unavailable-{int(time.time())}"
 
     async def download_image_result(self, image_url: str, output_dir: Optional[str] = None) -> str:
         """
@@ -1048,11 +1221,11 @@ class AIService:
             from utils.image_utils import download_image_from_url, decode_base64_to_file  # type: ignore
 
         from config import settings
-        base_dir = settings.TEMP_PROCESSING_DIR
+        base_dir = settings.TEMP_DOWNLOADS_DIR  # 改为使用downloads目录，更明确的临时用途
         target_dir = Path(output_dir) if output_dir else base_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        filename = f"result_{int(time.time())}.png"
+        filename = f"edit_result_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
         save_path = str(target_dir / filename)
 
         try:
@@ -1094,68 +1267,68 @@ class AIService:
         model = "doubao-seedream-4-0-250828"
         if self.provider.is_available():
             try:
-                # 将base64图像保存为临时文件并通过临时服务器提供访问
-                from utils.image_utils import decode_base64_to_file
-                import tempfile
-                import threading
-                from http.server import SimpleHTTPRequestHandler
-                import socketserver
-                import time
+                logger.info(f"向图生图模型 {model} 发送请求...")
+                logger.info(f"使用base64图像输入，大小: {len(base64_image)} 字符")
 
-                # 解码base64图像到临时文件
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-                    temp_path = temp_file.name
-                    decode_base64_to_file(base64_image, temp_path)
-
-                # 启动临时HTTP服务器
-                temp_dir = os.path.dirname(temp_path)
-                port = 8999  # 固定端口或动态分配
-                handler = SimpleHTTPRequestHandler
-                httpd = socketserver.TCPServer(("", port), handler)
-
-                def run_server():
-                    httpd.serve_forever()
-
-                server_thread = threading.Thread(target=run_server, daemon=True)
-                server_thread.start()
-
-                # 等待服务器启动
-                time.sleep(0.5)
-
-                # 构建图像URL
-                image_filename = os.path.basename(temp_path)
-                image_url = f"http://localhost:{port}/{image_filename}"
-
-                # 调用火山引擎图生图API
+                # 直接调用provider方法，传递base64图像
                 result_url = self.provider.image_to_image(
                     model=model,
                     prompt=prompt,
-                    image_url=image_url
+                    image_url="",  # 空URL，因为我们使用base64
+                    image_base64=base64_image  # 传递base64数据
                 )
-
-                # 清理临时文件和服务器
-                try:
-                    httpd.shutdown()
-                    httpd.server_close()
-                except:
-                    pass
-                try:
-                    os.unlink(temp_path)
-                except:
-                    pass
 
                 if result_url:
                     logger.info(f"图生图成功: {result_url}")
                     return result_url
                 else:
+                    logger.error("图生图返回空结果")
                     raise Exception("图生图返回空结果")
 
             except Exception as e:
                 logger.error(f"图生图失败: {e}")
-                # 降级处理
-                return f"placeholder://image-to-image-fallback-{hash(prompt)[:8]}"
+                # 降级处理 - 返回占位符
+                logger.warning("图生图失败，返回占位符")
+                return f"placeholder://image-to-image-fallback-{int(time.time())}"
         else:
             # 降级返回占位符
             logger.warning("火山引擎服务不可用，返回图生图占位符")
             return f"placeholder://image-to-image-unavailable-{int(time.time())}"
+
+    async def enhance_prompt_with_reference_description(self, original_prompt: str, reference_image_path: str) -> str:
+        """
+        基于参考图片智能增强prompt，确保风格一致性
+        当图生图API失败时，通过文字描述尽量保持一致性
+        """
+        try:
+            logger.info(f"🔄 开始基于参考图片增强prompt: {reference_image_path}")
+
+            # 调用底层provider的方法
+            if hasattr(self.provider, 'enhance_prompt_with_reference_description'):
+                enhanced_prompt = self.provider.enhance_prompt_with_reference_description(original_prompt, reference_image_path)
+                logger.info(f"✅ 使用provider方法增强prompt，长度: {len(enhanced_prompt)} 字符")
+                return enhanced_prompt
+            else:
+                # 降级到通用一致性描述
+                consistency_enhancement = """
+
+**重要：风格一致性要求**
+基于参考图片，确保以下一致性：
+1. 严格保持相同的角色外观、发型、服装和配饰
+2. 保持完全相同的漫画绘画风格和线条特征
+3. 保持相同的色彩处理方式和整体色调
+4. 保持相似的角色比例和身材特征
+5. 保持相同的背景渲染风格和细节处理程度
+
+**强制要求** 务必确保角色外观、服装、发型与参考图片完全一致
+**强制要求** 保持完全相同的绘画风格和色彩处理方式
+"""
+                enhanced_prompt = original_prompt + consistency_enhancement
+                logger.info(f"✅ 使用通用一致性描述增强prompt，长度: {len(enhanced_prompt)} 字符")
+                return enhanced_prompt
+
+        except Exception as e:
+            logger.error(f"❌ 智能prompt增强失败: {e}")
+            # 最基础的增强
+            return original_prompt + "，保持与前一张图片完全相同的角色外观和绘画风格"
 

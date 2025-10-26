@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 class ConversationContext:
     """对话上下文管理器"""
 
-    def __init__(self, max_messages: int = 20, max_tokens: int = 8000):
+    def __init__(self, max_messages: int = 20, max_tokens: int = 32768):
         self.conversation_id = str(uuid.uuid4())
         self.messages: List[Dict[str, str]] = []
         self.max_messages = max_messages
-        self.max_tokens = max_tokens
+        #self.max_tokens = max_tokens
         self.created_at = time.time()
         self.last_updated = time.time()
 
@@ -71,7 +71,7 @@ class ContextManager:
         self.contexts: Dict[str, ConversationContext] = {}
         self.default_context_id = None
 
-    def create_context(self, max_messages: int = 20, max_tokens: int = 8000) -> str:
+    def create_context(self, max_messages: int = 20, max_tokens: int = 32768) -> str:
         """创建新的对话上下文"""
         context = ConversationContext(max_messages, max_tokens)
         self.contexts[context.conversation_id] = context
@@ -188,75 +188,290 @@ class VolcengineService:
             completion = self.client.chat.completions.create(**completion_params)
             response_content = completion.choices[0].message.content
             logger.info(f"成功接收到模型 {model} 的响应。")
+            logger.info(response_content)
             return response_content
         except Exception as e:
             logger.error(f"调用模型 {model} 失败: {e}")
             return None
 
-    def text_to_image(self, model: str, prompt: str, width: int = 1024, height: int = 1024) -> Optional[str]:
+    def text_to_image(
+        self,
+        model: str,
+        prompt: str,
+        size: str = "2048x2048",
+        sequential_generation: str = "auto",
+        max_images: int = 1,
+        stream: bool = False
+    ) -> Optional[any]:
         """
-        调用文生图模型 (如 doubao-seedream-4.0)。
+        调用文生图模型 (如 doubao-seedream-4-0-250828)。
+
+        Args:
+            model: 模型名称
+            prompt: 提示词
+            size: 图像尺寸，支持两种格式：
+                  1. 预设值：1K、2K、4K
+                  2. 像素值：如"2048x2048"，默认"2048x2048"
+                  总像素范围：[1280x720, 4096x4096]，宽高比范围：[1/16, 16]
+            sequential_generation: 组图设置，"auto" 或 "disabled"
+            max_images: 最大生成图片数量 (1-5)
+            stream: 是否启用流式输出
+
+        Returns:
+            根据模式返回不同结果：
+            - 非流式单图：返回单个URL字符串
+            - 非流式组图：返回URL列表
+            - 流式模式：返回生成器对象
         """
         if not self.is_available():
             logger.error("火山引擎服务不可用。")
             return None
         try:
-            logger.info(f"向文生图模型 {model} 发送请求...")
+            logger.info(f"向文生图模型 {model} 发送请求... (组图: {sequential_generation}, 流式: {stream}, 最大图片: {max_images})")
 
-            # 转换宽高为尺寸字符串
-            if width == 512 and height == 512:
-                size = "512x512"
-            elif width == 768 and height == 768:
-                size = "768x768"
-            elif width == 1024 and height == 1024:
-                size = "1024x1024"
-            elif width == 1536 and height == 1536:
-                size = "1536x1536"
-            elif width == 2048 and height == 2048:
-                size = "2048x2048"
-            elif width == 1024 and height == 2048:
-                size = "1024x2048"
-            elif width == 2048 and height == 1024:
-                size = "2048x1024"
+            # 支持官方推荐的K格式和像素尺寸
+            def parse_size_with_k_format(size_str: str) -> str:
+                """支持1K/2K格式和像素尺寸"""
+                size_str = size_str.lower()
+
+                # 官方推荐的K格式（移除超限的4K）
+                k_format_mapping = {
+                    "1k": "1024x1024",
+                    "2k": "2048x2048"
+                }
+
+                if size_str in k_format_mapping:
+                    return k_format_mapping[size_str]
+
+                # 支持的像素格式
+                if "x" in size_str:
+                    try:
+                        width, height = map(int, size_str.split("x"))
+                        # 验证像素限制 (官方：总像素不超过6000×6000)
+                        if 512 <= width <= 2048 and 512 <= height <= 2048:
+                            # 验证宽高比限制 [1/16, 16]
+                            ratio = width / height
+                            if 1/16 <= ratio <= 16:
+                                return size_str
+                    except:
+                        pass
+
+                # 默认推荐2K格式
+                return "2k"
+
+            # 直接使用传入的size参数
+            size = parse_size_with_k_format(size)
+
+            # 验证并限制max_images
+            max_images = max(1, min(5, max_images))  # 确保1-5之间
+
+            # 构建请求参数
+            request_params = {
+                "model": model,
+                "prompt": prompt,
+                "size": size,
+                "response_format": "url",
+                "watermark": False
+            }
+
+            # 仅对doubao-seedream-4-0-250828模型添加组图和流式参数
+            if "seedream-4-0-250828" in model.lower():
+                # 修复：正确设置组图参数
+                request_params["sequential_image_generation"] = sequential_generation
+                request_params["stream"] = stream
+
+                # 当启用组图时，需要明确设置max_images参数来控制生成数量
+                if sequential_generation == "auto" and max_images > 1:
+                    try:
+                        # 使用正确的导入路径
+                        from volcenginesdkarkruntime.types.images import SequentialImageGenerationOptions
+                        request_params["sequential_image_generation_options"] = SequentialImageGenerationOptions(
+                            max_images=max_images
+                        )
+                        logger.info(f"设置组图选项: max_images={max_images}")
+                    except ImportError:
+                        # 如果导入失败，使用简单的参数设置
+                        request_params["max_images"] = max_images
+                        logger.warning(f"SequentialImageGenerationOptions 导入失败，使用简单参数: max_images={max_images}")
+                elif max_images > 1:
+                    # 如果没有启用组图但需要多张图片，尝试使用max_images参数
+                    request_params["max_images"] = max_images
+                    logger.info(f"设置多图参数: max_images={max_images}")
+
+                # 添加调试信息
+                logger.info(f"组图请求参数: sequential_image_generation={sequential_generation}, max_images={max_images}")
+
+            # 流式或非流式调用
+            if stream and "seedream-4-0-250828" in model.lower():
+                # 流式输出
+                return self.client.images.generate(**request_params)
             else:
-                size = "1024x1024"  # 默认尺寸
+                # 非流式输出
+                resp = self.client.images.generate(**request_params)
 
-            resp = self.client.images.generate(
-                model=model,
-                prompt=prompt,
-                size=size,
-                response_format="url",
-                watermark=True
-            )
-            image_url = resp.data[0].url
-            logger.info(f"成功接收到文生图模型 {model} 的响应。")
-            return image_url
+                # 添加响应调试信息
+                logger.info(f"API响应类型: {type(resp)}")
+                if hasattr(resp, 'data'):
+                    logger.info(f"响应数据长度: {len(resp.data)}")
+                    if hasattr(resp, 'usage') and hasattr(resp.usage, 'generated_images'):
+                        logger.info(f"API报告生成的图片数: {resp.usage.generated_images}")
+
+                # 修复：正确处理组图响应
+                if sequential_generation == "auto" and "seedream-4-0-250828" in model.lower():
+                    # 组图模式，返回多个URL
+                    if hasattr(resp, 'data') and len(resp.data) > 1:
+                        # 多图响应
+                        image_urls = [image.url for image in resp.data]
+                        logger.info(f"成功接收到文生图模型 {model} 的组图响应，共 {len(image_urls)} 张图片。")
+                        return image_urls
+                    else:
+                        # API可能返回单图，尝试获取单图URL
+                        if hasattr(resp, 'data') and len(resp.data) > 0:
+                            image_url = resp.data[0].url
+                            logger.warning(f"组图请求但返回单图，模型: {model}，响应数据长度: {len(resp.data)}")
+                            return image_url
+                        else:
+                            logger.error(f"组图请求失败，响应数据为空")
+                            return None
+                else:
+                    # 单图模式
+                    if hasattr(resp, 'data') and len(resp.data) > 0:
+                        image_url = resp.data[0].url
+                        logger.info(f"成功接收到文生图模型 {model} 的单图响应。")
+                        return image_url
+                    else:
+                        logger.error(f"单图请求失败，响应数据为空")
+                        return None
+
         except Exception as e:
             logger.error(f"调用文生图模型 {model} 失败: {e}")
             return None
 
-    def image_to_image(self, model: str, prompt: str, image_url: str) -> Optional[str]:
+    def image_to_image(self, model: str, prompt: str, image_url: str, image_base64: Optional[str] = None) -> Optional[str]:
         """
-        调用图像编辑模型 (doubao-seedream-4-0-250828)。
+        调用图生图模型 (doubao-seedream-4-0-250828)。
+
+        Args:
+            model: 模型名称
+            prompt: 提示词
+            image_url: 参考图片URL
+            image_base64: 参考图片的Base64编码 (可选)
         """
         if not self.is_available():
             logger.error("火山引擎服务不可用。")
             return None
         try:
-            logger.info(f"向图像编辑模型 {model} 发送请求...")
-            resp = self.client.images.generate(
-                model=model,
-                prompt=prompt,
-                image=image_url,
-                size="1024x1024",
-                response_format="url",
-                watermark=True
-            )
+            logger.info(f"向图生图模型 {model} 发送请求...")
+
+            # 构建请求参数
+            request_params = {
+                "model": model,
+                "prompt": prompt,
+                "size": "1024x1024",
+                "response_format": "url",
+                "watermark": False
+            }
+
+            # 优先使用image_base64，如果没有则使用image_url
+            if image_base64:
+                # 确保Base64格式正确
+                if not image_base64.startswith("data:image/"):
+                    image_base64 = f"data:image/png;base64,{image_base64}"
+                request_params["image"] = image_base64
+                logger.info(f"使用Base64图片输入")
+            elif image_url:
+                request_params["image"] = image_url
+                logger.info(f"使用URL图片输入: {image_url}")
+            else:
+                # 如果都没有，则纯文本生图
+                logger.info(f"未提供参考图片，进行纯文本生图")
+
+            resp = self.client.images.generate(**request_params)
             edited_image_url = resp.data[0].url
-            logger.info(f"成功接收到图像编辑模型 {model} 的响应。")
+            logger.info(f"成功接收到图生图模型 {model} 的响应。")
             return edited_image_url
         except Exception as e:
-            logger.error(f"调用图像编辑模型 {model} 失败: {e}")
+            logger.error(f"调用图生图模型 {model} 失败: {e}")
+            return None
+
+    def multi_reference_text_to_image(
+        self,
+        model: str,
+        prompt: str,
+        reference_images: list,
+        max_images: int = 1
+    ):
+        """
+        使用多参考图生成图片（doubao-seedream-4.0）
+
+        Args:
+            model: 模型名称
+            prompt: 提示词
+            reference_images: 参考图片路径列表
+            max_images: 最大生成图片数量
+
+        Returns:
+            生成的图片URL
+        """
+        if not self.is_available():
+            logger.error("火山引擎服务不可用。")
+            return None
+
+        try:
+            import base64
+
+            # 构建请求参数
+            request_params = {
+                "model": model,
+                "prompt": prompt,
+                "size": "1024x1024",
+                "response_format": "url",
+                "watermark": False
+            }
+
+            # 使用image_to_image API来支持参考图片
+            if len(reference_images) > 0:
+                logger.info(f"使用图生图API来支持{len(reference_images)}张参考图片")
+
+                # 获取第一张参考图片
+                ref_path = reference_images[0]
+                try:
+                    with open(ref_path, 'rb') as f:
+                        image_data = f.read()
+                    # 使用image_to_image API
+                    result = self.image_to_image(
+                        model=model,
+                        prompt=prompt,
+                        image_url=None,  # 不使用URL
+                        image_base64=base64.b64encode(image_data).decode('utf-8')
+                    )
+                    logger.info(f"成功调用图生图API处理参考图片")
+                    return result
+                except Exception as e:
+                    logger.error(f"图生图API调用失败: {e}")
+                    # 降级到普通文生图，但在prompt中描述参考图
+                    logger.info("降级到普通文生图，增强prompt描述")
+                    # 自动分析参考图内容并增强prompt
+                    if ref_path and ('蓝色' not in prompt or '宝蓝色' not in prompt):
+                        prompt += "，参考图显示的是蓝色长发角色"
+                    if ref_path and ('魔法' not in prompt or '巫师' not in prompt):
+                        prompt += "，魔法师风格服装"
+
+            logger.info(f"向多参考图模型 {model} 发送请求...")
+
+            # 调用API
+            resp = self.client.images.generate(**request_params)
+
+            if hasattr(resp, 'data') and len(resp.data) > 0:
+                image_url = resp.data[0].url
+                logger.info(f"成功接收到多参考图模型 {model} 的响应。")
+                return image_url
+            else:
+                logger.warning(f"多参考图模型返回空响应: {resp}")
+                return None
+
+        except Exception as e:
+            logger.error(f"调用多参考图模型 {model} 失败: {e}")
             return None
 
 
@@ -272,7 +487,7 @@ class AIService:
     对外提供统一的异步接口，并在底层服务不可用时进行优雅降级。
     """
     TEXT_MODELS = [
-        "doubao-seed-1-6-flash-250828",
+        "deepseek-v3-1-terminus",
     ]
     IMAGE_MODELS = [
         "doubao-seedream-4-0-250828",
@@ -331,6 +546,49 @@ class AIService:
                 }
             },
             "required": ["summary", "key_points", "sentiment"]
+        }
+
+    def create_simple_text_segmentation_schema(self) -> Dict[str, Any]:
+        """创建简化版文本分段JSON Schema - 强制使用JSON Schema"""
+        return {
+            "type": "object",
+            "properties": {
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "段落文本内容"
+                            },
+                            "segment_type": {
+                                "type": "string",
+                                "description": "段落类型",
+                                "enum": ["dialogue", "action", "description", "transition", "climax", "resolution"]
+                            },
+                            "scene_setting": {
+                                "type": "string",
+                                "description": "场景设置"
+                            },
+                            "characters": {
+                                "type": "string",
+                                "description": "出现的角色，用逗号分隔"
+                            },
+                            "emotional_tone": {
+                                "type": "string",
+                                "description": "情感基调"
+                            },
+                            "visual_focus": {
+                                "type": "string",
+                                "description": "视觉焦点"
+                            }
+                        },
+                        "required": ["content", "segment_type", "scene_setting", "characters", "emotional_tone", "visual_focus"]
+                    }
+                }
+            },
+            "required": ["segments"]
         }
 
     def create_character_analysis_schema(self) -> Dict[str, Any]:
@@ -395,6 +653,99 @@ class AIService:
             "required": ["scenes", "total_scenes"]
         }
 
+    def create_text_segmentation_schema(self) -> Dict[str, Any]:
+        """创建文本分段JSON Schema - 漫画导向版本（兼容豆包API）"""
+        return {
+            "type": "object",
+            "properties": {
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "段落完整文本内容"
+                            },
+                            "start_index": {
+                                "type": "integer",
+                                "description": "在原文中的起始位置"
+                            },
+                            "end_index": {
+                                "type": "integer",
+                                "description": "在原文中的结束位置"
+                            },
+                            "segment_type": {
+                                "type": "string",
+                                "enum": ["dialogue", "action", "description", "general"],
+                                "description": "段落类型"
+                            },
+                            "scene_setting": {
+                                "type": "string",
+                                "description": "具体环境描述（时间、地点、氛围）"
+                            },
+                            "characters_present": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "出场角色列表"
+                            },
+                            "emotional_tone": {
+                                "type": "string",
+                                "description": "情感基调"
+                            },
+                            "key_events": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "关键事件列表"
+                            },
+                            "transition_clues": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "过渡线索"
+                            },
+                            "character_descriptions": {
+                                "type": "object",
+                                "description": "角色外貌描述关键词",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
+                            },
+                            "scene_elements": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "环境视觉要素"
+                            },
+                            "visual_keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "整体视觉关键词"
+                            },
+                            "character_importance": {
+                                "type": "object",
+                                "description": "角色重要性标识",
+                                "additionalProperties": {
+                                    "type": "boolean"
+                                }
+                            },
+                            "comic_suitability": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                                "description": "漫画适配度评分(0-1)"
+                            },
+                            "panel_focus": {
+                                "type": "string",
+                                "description": "画面焦点建议"
+                            }
+                        },
+                        "required": ["content", "characters_present", "character_descriptions", "scene_elements", "visual_keywords", "comic_suitability"]
+                    }
+                }
+            },
+            "required": ["segments"]
+        }
+
     async def health_check(self) -> Dict[str, bool]:
         """
         返回各模型可用状态的字典，用于路由层健康检查。
@@ -410,8 +761,8 @@ class AIService:
     async def generate_text(
         self,
         prompt: str,
-        model_preference: str = "doubao-seed-1-6-flash-250828",
-        max_tokens: int = 1000,
+        model_preference: str = "deepseek-v3-1-terminus",
+        max_tokens: int = 32768,
         temperature: float = 0.7,
         context_id: Optional[str] = None,
         use_json_schema: bool = False,
@@ -451,6 +802,10 @@ class AIService:
                 schema = self.create_character_analysis_schema()
             elif schema_type == "script_generation":
                 schema = self.create_script_generation_schema()
+            elif schema_type == "text_segmentation":
+                schema = self.create_text_segmentation_schema()
+            elif schema_type == "simple_text_segmentation":
+                schema = self.create_simple_text_segmentation_schema()
             else:
                 schema = None
 
@@ -491,7 +846,7 @@ class AIService:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        model_preference: str = "doubao-seed-1-6-flash-250828",
+        model_preference: str = "deepseek-v3-1-terminus",
         temperature: float = 0.7,
         context_id: Optional[str] = None,
         clear_context: bool = False
@@ -538,28 +893,94 @@ class AIService:
     async def generate_image(
         self,
         prompt: str,
-        model_preference: str = "seedream",
+        model_preference: str = "doubao-seedream-4-0-250828",
         size: str = "1024x1024",
         quality: str = "standard",
-    ) -> str:
-        """根据文本生成图像并返回URL。不可用时返回占位符URL。"""
+        sequential_generation: str = "auto",
+        max_images: int = 1,
+        stream: bool = True
+    ):
+        """
+        根据文本生成图像，支持组图和流式输出
+
+        Args:
+            prompt: 图像描述
+            model_preference: 模型偏好
+            size: 图像尺寸
+            quality: 图像质量
+            sequential_generation: 组图设置 ("auto" 或 "disabled")
+            max_images: 最大生成图片数量 (1-5)
+            stream: 是否启用流式输出
+
+        Returns:
+            根据模式返回不同结果：
+            - 非流式单图：返回单个URL字符串
+            - 非流式组图：返回URL列表
+            - 流式模式：返回生成器对象
+        """
         width, height = self._parse_size(size)
         model = "doubao-seedream-4-0-250828" if "seedream" in model_preference else self.IMAGE_MODELS[0]
-        if self.provider.is_available():
-            url = self.provider.text_to_image(model=model, prompt=prompt, width=width, height=height)
-            if isinstance(url, str) and url:
-                return url
-        placeholder = f"placeholder://seedream/{width}x{height}/{int(time.time())}"
-        logger.warning(f"AI图像服务不可用或失败，使用占位符URL: {placeholder}")
-        return placeholder
 
-    async def text_to_image(self, model: str, prompt: str, size: str = "1024x1024") -> str:
-        """兼容批处理器的签名，返回图像URL或占位符。"""
+        if self.provider.is_available():
+            result = self.provider.text_to_image(
+                model=model,
+                prompt=prompt,
+                width=width,
+                height=height,
+                sequential_generation=sequential_generation,
+                max_images=max_images,
+                stream=stream
+            )
+
+            if result is not None:
+                return result
+
+        # 降级处理
+        if stream:
+            # 流式模式的降级处理 - 返回同步生成器
+            def fallback_stream():
+                placeholder = f"placeholder://seedream/{width}x{height}/{int(time.time())}"
+                yield placeholder
+            return fallback_stream()
+        else:
+            # 非流式模式的降级处理
+            if sequential_generation == "auto" and max_images > 1:
+                # 组图降级：返回多个占位符
+                placeholders = [
+                    f"placeholder://seedream/{width}x{height}/{int(time.time())}_{i}"
+                    for i in range(max_images)
+                ]
+                logger.warning(f"AI组图服务不可用，返回 {max_images} 个占位符URL")
+                return placeholders
+            else:
+                # 单图降级
+                placeholder = f"placeholder://seedream/{width}x{height}/{int(time.time())}"
+                logger.warning(f"AI图像服务不可用或失败，使用占位符URL: {placeholder}")
+                return placeholder
+
+    async def text_to_image(
+        self,
+        model: str,
+        prompt: str,
+        size: str = "1024x1024",
+        sequential_generation: str = "auto",
+        max_images: int = 1,
+        stream: bool = True
+    ):
+        """兼容批处理器的签名，支持组图和流式输出。"""
         width, height = self._parse_size(size)
         if self.provider.is_available():
-            url = self.provider.text_to_image(model=model, prompt=prompt, width=width, height=height)
-            if isinstance(url, str) and url:
-                return url
+            result = self.provider.text_to_image(
+                model=model,
+                prompt=prompt,
+                width=width,
+                height=height,
+                sequential_generation=sequential_generation,
+                max_images=max_images,
+                stream=stream
+            )
+            if result is not None:
+                return result
         return f"placeholder://{model}/{width}x{height}/{int(time.time())}"
 
     async def edit_image_with_base64(
@@ -567,8 +988,9 @@ class AIService:
         prompt: str,
         base64_image: str,
         base64_mask: Optional[str] = None,
-        model_preference: str = "seedream",
+        model_preference: str = "doubao-seedream-4-0-250828",
         size: str = "1024x1024",
+        stream: bool = True,
     ) -> str:
         """使用base64图像进行编辑，返回结果URL或占位符。"""
         width, height = self._parse_size(size)
@@ -577,7 +999,7 @@ class AIService:
         if self.provider.is_available():
             try:
                 # 将base64图像保存为临时文件并通过临时服务器提供访问
-                from ..utils.image_utils import decode_base64_to_file
+                from utils.image_utils import decode_base64_to_file
                 import tempfile
                 import threading
                 from http.server import SimpleHTTPRequestHandler
@@ -621,11 +1043,12 @@ class AIService:
         - placeholder://*: 生成1x1透明PNG文件
         """
         try:
-            from ..utils.image_utils import download_image_from_url, decode_base64_to_file  # type: ignore
+            from utils.image_utils import download_image_from_url, decode_base64_to_file  # type: ignore
         except Exception:
             from utils.image_utils import download_image_from_url, decode_base64_to_file  # type: ignore
 
-        base_dir = Path(__file__).resolve().parent.parent / "temp" / "images"
+        from config import settings
+        base_dir = settings.TEMP_PROCESSING_DIR
         target_dir = Path(output_dir) if output_dir else base_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -652,7 +1075,8 @@ class AIService:
         base64_image: str,
         model_preference: str = "doubao-seedream-4-0-250828",
         size: str = "1024x1024",
-        strength: float = 0.8
+        strength: float = 0.8,
+        stream: bool = True
     ) -> str:
         """
         图生图功能 - 使用base64图像作为参考生成新图像
@@ -671,7 +1095,7 @@ class AIService:
         if self.provider.is_available():
             try:
                 # 将base64图像保存为临时文件并通过临时服务器提供访问
-                from ..utils.image_utils import decode_base64_to_file
+                from utils.image_utils import decode_base64_to_file
                 import tempfile
                 import threading
                 from http.server import SimpleHTTPRequestHandler
@@ -735,156 +1159,3 @@ class AIService:
             logger.warning("火山引擎服务不可用，返回图生图占位符")
             return f"placeholder://image-to-image-unavailable-{int(time.time())}"
 
-    # 上下文管理API方法
-    def create_conversation_context(self, max_messages: int = 20, max_tokens: int = 8000) -> str:
-        """创建新的对话上下文"""
-        return self.context_manager.create_context(max_messages, max_tokens)
-
-    def get_conversation_context(self, context_id: str) -> Optional[Dict[str, Any]]:
-        """获取对话上下文信息"""
-        context = self.context_manager.get_context(context_id)
-        return context.get_context_info() if context else None
-
-    def delete_conversation_context(self, context_id: str) -> bool:
-        """删除对话上下文"""
-        if self.context_manager.get_context(context_id):
-            self.context_manager.delete_context(context_id)
-            return True
-        return False
-
-    def list_conversation_contexts(self) -> List[Dict[str, Any]]:
-        """列出所有对话上下文"""
-        return self.context_manager.list_contexts()
-
-    def clear_conversation_context(self, context_id: str) -> bool:
-        """清空对话上下文（保留系统消息）"""
-        context = self.context_manager.get_context(context_id)
-        if context:
-            context.clear_context()
-            return True
-        return False
-
-    # 结构化数据生成方法
-    async def generate_text_analysis(
-        self,
-        text: str,
-        model_preference: str = "doubao-seed-1-6-flash-250828",
-        context_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """生成文本分析结果（使用JSON Schema）"""
-        prompt = f"""请分析以下文本并提供结构化的分析结果：
-
-文本内容：
-{text}
-
-请按照JSON Schema格式返回分析结果，包括：
-1. 文本摘要（不超过200字）
-2. 关键点列表
-3. 情感倾向分析
-4. 识别的主要实体
-
-请确保返回有效的JSON格式。"""
-
-        result = await self.generate_text(
-            prompt=prompt,
-            model_preference=model_preference,
-            use_json_schema=True,
-            schema_type="text_analysis",
-            context_id=context_id
-        )
-
-        try:
-            import json
-            return json.loads(result)
-        except json.JSONDecodeError:
-            logger.error("文本分析结果不是有效的JSON格式")
-            return {
-                "error": "Invalid JSON response",
-                "raw_result": result
-            }
-
-    async def generate_character_analysis(
-        self,
-        text: str,
-        model_preference: str = "doubao-seed-1-6-flash-250828",
-        context_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """生成角色分析结果（使用JSON Schema）"""
-        prompt = f"""请分析以下文本中的角色信息：
-
-文本内容：
-{text}
-
-请按照JSON Schema格式返回角色分析结果，包括：
-1. 识别的所有角色（姓名、描述、角色类型、特征）
-2. 角色之间的关系图
-3. 角色总数统计
-
-请确保返回有效的JSON格式。"""
-
-        result = await self.generate_text(
-            prompt=prompt,
-            model_preference=model_preference,
-            use_json_schema=True,
-            schema_type="character_analysis",
-            context_id=context_id
-        )
-
-        try:
-            import json
-            return json.loads(result)
-        except json.JSONDecodeError:
-            logger.error("角色分析结果不是有效的JSON格式")
-            return {
-                "error": "Invalid JSON response",
-                "raw_result": result
-            }
-
-    async def generate_script_with_analysis(
-        self,
-        text_analysis: Dict[str, Any],
-        style_requirements: Optional[str] = None,
-        model_preference: str = "doubao-seed-1-6-flash-250828",
-        context_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """基于文本分析生成漫画脚本（使用JSON Schema）"""
-        style_text = f"\n风格要求：{style_requirements}" if style_requirements else ""
-
-        prompt = f"""基于以下文本分析结果，生成漫画脚本：
-
-文本分析：
-{text_analysis}
-{style_text}
-
-请按照JSON Schema格式返回漫画脚本，包括：
-1. 分场景的详细脚本（场景编号、场景设置、角色、对话、动作）
-2. 总场景数统计
-3. 预估总时长
-
-每个场景应该包含完整的视觉和对话描述。请确保返回有效的JSON格式。"""
-
-        result = await self.generate_text(
-            prompt=prompt,
-            model_preference=model_preference,
-            use_json_schema=True,
-            schema_type="script_generation",
-            context_id=context_id
-        )
-
-        try:
-            import json
-            return json.loads(result)
-        except json.JSONDecodeError:
-            logger.error("脚本生成结果不是有效的JSON格式")
-            return {
-                "error": "Invalid JSON response",
-                "raw_result": result
-            }
-
-    @staticmethod
-    def _parse_size(size: str) -> (int, int):
-        try:
-            w_str, h_str = size.lower().split('x')
-            return int(w_str), int(h_str)
-        except Exception:
-            return 1024, 1024

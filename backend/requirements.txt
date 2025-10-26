@@ -16,12 +16,8 @@ python-dotenv==1.0.0
 # Image processing
 pillow==10.1.0
 
-# LangGraph and LangChain for workflow orchestration
-langgraph==0.0.40
-langchain==0.1.0
-langchain-core==0.1.23
-langchain-community==0.0.20
-langsmith==0.0.87
+# LangGraph for workflow orchestration
+langgraph>=0.1.0
 numpy==1.26.4
 packaging==23.2
 
@@ -31,11 +27,10 @@ tiktoken==0.5.2
 
 # Volcengine Ark (火山方舟) AI model support
 volcengine-python-sdk[ark]==4.0.26
-cryptography==46.0.3
-cffi==2.0.0
+volcengine-python-sdk[runtime]==4.0.26
 
 # Data structures and utilities
-typing-extensions==4.8.0
+typing-extensions>=4.12.2
 
 # Development dependencies (optional)
 pytest==7.4.3

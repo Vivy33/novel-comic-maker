@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class SegmentGenerationRequest(BaseModel):
     style_requirements: Optional[str] = ""
     generation_count: int = 3
     previous_segment_image: Optional[str] = None  # 前情提要图片
+    previous_segment_text: Optional[str] = None   # 前情提要文本
 
 
 @router.post("/text-compression/start")
@@ -239,6 +241,34 @@ async def generate_segment_comics(request: SegmentGenerationRequest):
     Generate comic panels for a single segment
     """
     try:
+        logger.info(f"🎨 开始生成段落漫画 - 项目: {request.project_name}, 段落: {request.segment_index}")
+        logger.info(f"📝 段落文本长度: {len(request.segment_text)} 字符")
+        logger.info(f"🎭 选定角色: {request.selected_characters}")
+        logger.info(f"🎨 风格要求: {request.style_requirements}")
+        logger.info(f"📸 生成数量: {request.generation_count}")
+
+        # 详细记录前情提要接收情况
+        logger.info(f"🖼️ 前情提要图片: {request.previous_segment_image}")
+        logger.info(f"🔍 [前情提要接收详情]")
+        logger.info(f"   - 当前段落: {request.segment_index + 1}")
+        logger.info(f"   - 前情提要路径: {request.previous_segment_image}")
+        logger.info(f"   - 路径类型: {type(request.previous_segment_image)}")
+        logger.info(f"   - 路径长度: {len(request.previous_segment_image) if request.previous_segment_image else 0}")
+        logger.info(f"   - 是否为空: {not request.previous_segment_image}")
+
+        # 特别关注段落3的前情提要接收
+        if request.segment_index == 2:  # 段落3
+            logger.info(f"🚨 [重要] 段落3接收前情提要:")
+            logger.info(f"   - 前情提要路径: {request.previous_segment_image}")
+            logger.info(f"   - 路径有效性: {'✅ 有效' if request.previous_segment_image else '❌ 无效'}")
+            if request.previous_segment_image:
+                logger.info(f"   - 路径格式: {'项目相对路径' if request.previous_segment_image.startswith('/projects/') else 'HTTP URL' if request.previous_segment_image.startswith('http') else '其他格式'}")
+                logger.info(f"   - 文件存在性: {'✅ 存在' if os.path.exists(request.previous_segment_image[1:] if request.previous_segment_image.startswith('/') else request.previous_segment_image) else '❌ 不存在'}")
+            else:
+                logger.error(f"❌ 段落3没有接收到前情提要，这表明段落2→3传递失败！")
+        elif request.segment_index == 1:  # 段落2
+            logger.info(f"📊 段落2前情提要状态: {'✅ 有前情提要' if request.previous_segment_image else '❌ 无前情提要'}")
+
         if not request.segment_text.strip():
             raise HTTPException(status_code=400, detail="段落文本不能为空")
 
@@ -292,7 +322,17 @@ async def generate_segment_comics(request: SegmentGenerationRequest):
         previous_context = None
         if request.previous_segment_image:
             previous_context = str(request.previous_segment_image)
-            logger.info(f"前情提要路径转换为字符串: {previous_context}")
+            logger.info(f"📎 前情提要路径转换为字符串: {previous_context}")
+        else:
+            logger.info(f"ℹ️ 段落 {request.segment_index} 没有前情提要图片（第一段或前情提要不可用）")
+
+        # 添加前情提要文本
+        previous_segment_text = None
+        if request.previous_segment_text:
+            previous_segment_text = str(request.previous_segment_text)
+            logger.info(f"📝 前情提要文本: {previous_segment_text[:100]}...")
+        else:
+            logger.info(f"ℹ️ 段落 {request.segment_index} 没有前情提要文本（第一段）")
 
         comic_script = {
             "scene_description": request.segment_text,
@@ -300,10 +340,12 @@ async def generate_segment_comics(request: SegmentGenerationRequest):
             "characters": request.selected_characters or [],
             "style_requirements": request.style_requirements or "",
             "reference_images": request.style_reference_images or [],
-            "previous_context": previous_context
+            "previous_context": previous_context,
+            "previous_segment_text": previous_segment_text  # 新增：前情提要文本
         }
 
-        
+        logger.info(f"🎬 开始调用图像生成器，脚本包含前情提要图片: {'是' if previous_context else '否'}, 前情提要文本: {'是' if previous_segment_text else '否'}")
+
         # 生成组图
         generation_result = await image_generator.generate_images_for_script(
             script=comic_script,
@@ -312,16 +354,38 @@ async def generate_segment_comics(request: SegmentGenerationRequest):
             segment_index=request.segment_index
         )
 
-        # 更新分段状态
-        segmentation_state = fs.get_project_timeline(str(project_path))[-1]  # 获取最新的分段状态
-        if segmentation_state and segmentation_state.get("type") == "segmentation":
-            segmentation_state["current_segment_index"] = request.segment_index
+        logger.info(f"✅ 图像生成完成，生成结果: {generation_result.get('total_options', 0)} 张图片")
+
+        # 更新分段状态 - 修复历史记录保存逻辑
+        logger.info(f"📝 开始保存段落 {request.segment_index + 1} 的生成历史记录")
+
+        # 获取segmentation状态（而不是获取最新的任意状态）
+        segmentation_state = None
+        for event in reversed(fs.get_project_timeline(str(project_path))):
+            if event.get("type") == "segmentation":
+                segmentation_state = event
+                break
+
+        if segmentation_state:
+            logger.info(f"✅ 找到segmentation状态，保存生成记录")
+            # 更新当前段落的生成记录
             fs.save_history(str(project_path), "segment_generation", {
                 "segment_index": request.segment_index,
                 "generation_result": generation_result,
                 "config": script_config,
                 "timestamp": datetime.now().isoformat()
             })
+            logger.info(f"💾 段落 {request.segment_index + 1} 生成记录已保存到历史")
+        else:
+            logger.error(f"❌ 未找到segmentation状态，无法保存生成记录")
+            # 即使没有segmentation状态，也要保存生成记录
+            fs.save_history(str(project_path), "segment_generation", {
+                "segment_index": request.segment_index,
+                "generation_result": generation_result,
+                "config": script_config,
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info(f"💾 强制保存段落 {request.segment_index + 1} 生成记录")
 
         return {
             "success": True,
@@ -353,7 +417,9 @@ async def confirm_segment_selection(request: SegmentConfirmationRequest):
     Confirm selected image for segment and move to next
     """
     try:
-        logger.info(f"开始处理段落确认请求 - 项目: {request.project_name}, 段落: {request.segment_index}, 选择图片: {request.selected_image_index}")
+        logger.info(f"✅ 开始处理段落确认请求 - 项目: {request.project_name}, 段落: {request.segment_index}")
+        logger.info(f"🖼️ 用户选择的图片索引: {request.selected_image_index}")
+        logger.info(f"📋 准备为下一段设置前情提要")
 
         if not request.project_name:
             raise HTTPException(status_code=400, detail="项目名称不能为空")
@@ -392,42 +458,143 @@ async def confirm_segment_selection(request: SegmentConfirmationRequest):
         logger.info(f"处理项目路径: {project_path_str}")
 
         # 从最新的segment_generation历史记录中获取选择的图片路径
+        logger.info(f"🔍 开始查找段落 {request.segment_index} 的生成记录...")
+        found_segment = False
+
         for event in reversed(fs.get_project_timeline(str(project_path))):
             if (event.get("type") == "segment_generation" and
                 event.get("data", {}).get("segment_index") == request.segment_index):
+                found_segment = True
+                logger.info(f"✅ 找到段落 {request.segment_index} 的生成记录")
+
                 generation_result = event.get("data", {}).get("generation_result", {})
                 generated_images = generation_result.get("generated_images", [])
+                logger.info(f"📊 该段落生成了 {len(generated_images)} 张图片")
+
                 # 根据用户选择的索引获取对应的图片路径
                 if (0 <= request.selected_image_index < len(generated_images)):
                     selected_image = generated_images[request.selected_image_index]
+                    logger.info(f"🎯 用户选择了第 {request.selected_image_index + 1} 张图片")
+
                     # 优先使用本地路径，如果没有则使用远程URL
                     local_path = selected_image.get("local_path")
                     remote_url = selected_image.get("image_url")
+                    image_status = selected_image.get("status", "unknown")
+
+                    logger.info(f"📁 图片状态: {image_status}")
+                    logger.info(f"📁 本地路径: {local_path}")
+                    logger.info(f"🌐 远程URL: {remote_url}")
 
                     # 确保路径是字符串类型
                     if local_path:
                         local_path = str(local_path)
-                        logger.info(f"本地路径转换为字符串: {local_path}")
+                        logger.info(f"✅ 本地路径转换为字符串: {local_path}")
                     if remote_url:
                         remote_url = str(remote_url)
-                        logger.info(f"远程URL转换为字符串: {remote_url}")
+                        logger.info(f"✅ 远程URL转换为字符串: {remote_url}")
 
-                    # 如果是本地路径，转换为相对于projects根目录的路径
-                    if local_path and str(fs.projects_dir) in local_path:
-                        # 提取相对于projects根目录的路径（包含项目名）
-                        relative_to_projects = local_path.replace(str(fs.projects_dir) + "/", "")
-                        selected_image_path = "/projects/" + relative_to_projects
-                        logger.info(f"转换本地路径为相对路径: {local_path} -> {selected_image_path}")
+                    # 只有成功的图片才能作为前情提要
+                    if image_status != "success":
+                        logger.warning(f"❌ 选择的图片状态不是success: {image_status}")
+                        selected_image_path = None
+                    elif local_path and os.path.isfile(local_path):
+                        # 如果是本地路径且文件存在，转换为相对于projects根目录的路径
+                        try:
+                            file_size = os.path.getsize(local_path)
+                            logger.info(f"📏 本地图片文件大小: {file_size} bytes")
+
+                            if str(fs.projects_dir) in local_path:
+                                # 提取相对于projects根目录的路径（包含项目名）
+                                relative_to_projects = local_path.replace(str(fs.projects_dir) + "/", "")
+                                selected_image_path = "/projects/" + relative_to_projects
+                                logger.info(f"🔄 转换本地路径为相对路径: {local_path} -> {selected_image_path}")
+                            else:
+                                # 如果本地路径不是在projects目录下，直接使用绝对路径
+                                selected_image_path = local_path
+                                logger.info(f"🔄 使用本地绝对路径作为前情提要: {selected_image_path}")
+                        except Exception as e:
+                            logger.error(f"❌ 处理本地路径时出错: {e}")
+                            selected_image_path = None
                     elif remote_url:
                         # 使用远程URL
                         selected_image_path = remote_url
-                        logger.info(f"使用远程URL: {remote_url}")
+                        logger.info(f"🌐 使用远程URL作为前情提要: {selected_image_path}")
                     else:
-                        logger.warning(f"无法获取确认图片路径，本地路径: {local_path}, 远程URL: {remote_url}")
+                        logger.warning(f"❌ 无法获取有效的确认图片路径")
+                        logger.warning(f"   本地路径: {local_path} (存在: {os.path.isfile(local_path) if local_path else False})")
+                        logger.warning(f"   远程URL: {remote_url}")
                         selected_image_path = None
+                else:
+                    logger.error(f"❌ 用户选择的索引超出范围: {request.selected_image_index} >= {len(generated_images)}")
+                    selected_image_path = None
                 break
 
-        logger.info(f"段落确认成功 - 段落: {request.segment_index + 1}, 确认图片路径: {selected_image_path}, 有下一段: {next_segment_index < total_segments} [FIXED]")
+        if not found_segment:
+            logger.error(f"❌ 未找到段落 {request.segment_index} 的生成记录")
+            selected_image_path = None
+
+        logger.info(f"🎉 段落 {request.segment_index + 1} 确认成功！")
+        logger.info(f"📸 确认的图片路径: {selected_image_path}")
+        logger.info(f"➡️ 是否有下一段: {'是' if next_segment_index < total_segments else '否'}")
+
+        if next_segment_index < total_segments:
+            logger.info(f"🔄 准备进入段落 {next_segment_index + 1}，前情提要已设置")
+            # 特别关注段落2→3的传递
+            if next_segment_index == 2:  # 下一段是段落3
+                logger.info(f"🚨 [重要] 段落2→3前情提要传递:")
+                logger.info(f"   - 当前段落: {request.segment_index + 1} (段落2)")
+                logger.info(f"   - 目标段落: {next_segment_index + 1} (段落3)")
+                logger.info(f"   - 前情提要路径: {selected_image_path}")
+                logger.info(f"   - 路径类型: {type(selected_image_path)}")
+                logger.info(f"   - 路径长度: {len(selected_image_path) if selected_image_path else 0}")
+                logger.info(f"   - 是否为空: {not selected_image_path}")
+        else:
+            logger.info(f"🏁 所有段落处理完成！")
+
+        # 在返回前进行最终验证和调试记录
+        logger.info(f"📋 最终验证结果:")
+        logger.info(f"   - 当前段落: {request.segment_index + 1}")
+        logger.info(f"   - 用户选择索引: {request.selected_image_index}")
+        logger.info(f"   - 下一段索引: {next_segment_index}")
+        logger.info(f"   - 总段落数: {total_segments}")
+        logger.info(f"   - 最终确认图片路径: {selected_image_path}")
+        logger.info(f"   - 路径类型: {type(selected_image_path)}")
+        logger.info(f"   - 路径是否为空: {not selected_image_path}")
+
+        # 额外的调试信息
+        if selected_image_path:
+            logger.info(f"🔍 [路径详情] ")
+            logger.info(f"   - 路径前缀: {selected_image_path[:20]}...")
+            logger.info(f"   - 是否以/projects/开头: {selected_image_path.startswith('/projects/')}")
+            logger.info(f"   - 是否为HTTP URL: {selected_image_path.startswith('http')}")
+        else:
+            logger.error(f"❌ [严重错误] 确认图片路径为空，这将导致下一段没有前情提要！")
+
+        # 验证确认图片路径的有效性
+        if selected_image_path:
+            logger.info(f"🔍 验证确认图片路径...")
+            if selected_image_path.startswith('/projects/'):
+                logger.info(f"   ✅ 路径格式正确 (项目相对路径)")
+                # 验证文件是否存在
+                full_path = os.path.join(os.getcwd(), selected_image_path[1:])  # 去掉开头的 /
+                if os.path.isfile(full_path):
+                    file_size = os.path.getsize(full_path)
+                    logger.info(f"   ✅ 确认图片文件存在，大小: {file_size} bytes")
+                else:
+                    logger.error(f"   ❌ 确认图片文件不存在: {full_path}")
+                    logger.warning(f"   ⚠️ 将返回空路径，可能影响前情提要功能")
+            elif selected_image_path.startswith('http'):
+                logger.info(f"   ✅ 路径格式正确 (HTTP URL)")
+            else:
+                logger.info(f"   ℹ️ 路径格式未知: {selected_image_path}")
+                if os.path.isfile(selected_image_path):
+                    file_size = os.path.getsize(selected_image_path)
+                    logger.info(f"   ✅ 本地文件存在，大小: {file_size} bytes")
+                else:
+                    logger.warning(f"   ⚠️ 本地文件不存在: {selected_image_path}")
+        else:
+            logger.error(f"❌ 最终确认图片路径为空！")
+            logger.warning(f"   ⚠️ 这将导致下一段没有前情提要")
 
         return {
             "success": True,
@@ -437,7 +604,11 @@ async def confirm_segment_selection(request: SegmentConfirmationRequest):
             "has_next_segment": next_segment_index < total_segments,
             "next_segment_index": next_segment_index if next_segment_index < total_segments else None,
             "confirmed_image_path": selected_image_path,
-            "project_name": request.project_name
+            "project_name": request.project_name,
+            "debug_info": {
+                "confirmed_path_type": "project_relative" if selected_image_path and selected_image_path.startswith('/projects/') else "http_url" if selected_image_path and selected_image_path.startswith('http') else "absolute_path" if selected_image_path else "null",
+                "path_length": len(selected_image_path) if selected_image_path else 0
+            }
         }
 
     except HTTPException:

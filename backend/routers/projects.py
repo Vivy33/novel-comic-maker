@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from typing import List, Optional
 import logging
 import os
+import re
 from pathlib import Path
 
 from services.file_system import ProjectFileSystem
@@ -317,7 +318,7 @@ async def get_novels(
 
         novels = []
         for file_path in source_dir.iterdir():
-            if file_path.is_file() and file_path.suffix.lower() in ['.txt', '.md']:
+            if file_path.is_file() and file_path.suffix.lower() in ['.txt', '.md'] and not file_path.name.startswith('.'):
                 stat = file_path.stat()
                 novels.append({
                     "filename": file_path.name,
@@ -737,3 +738,185 @@ async def set_primary_novel(
     except Exception as e:
         logger.error(f"设置主要小说文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"设置主要小说文件失败: {str(e)}")
+
+
+def convert_chinese_number_to_arabic(chinese_num: str) -> int:
+    """
+    将中文数字转换为阿拉伯数字
+    Convert Chinese numbers to Arabic numbers
+    """
+    chinese_map = {
+        '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+        '百': 100, '千': 1000, '万': 10000
+    }
+
+    if chinese_num.isdigit():
+        return int(chinese_num)
+
+    result = 0
+    temp = 0
+
+    for char in chinese_num:
+        if char in chinese_map:
+            value = chinese_map[char]
+            if value == 10:
+                if temp == 0:
+                    temp = 1
+                result += temp
+                temp = 0
+            elif value >= 100:
+                if temp == 0:
+                    temp = 1
+                result += temp * value
+                temp = 0
+            else:
+                temp = temp * 10 + value
+
+    result += temp
+    return result
+
+
+@router.get("/{project_id}/novels/chapters", response_model=ApiResponse[List[dict]])
+async def get_novel_chapters(
+    project_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    获取小说章节列表
+    Get novel chapters list
+    """
+    try:
+        # 查找项目路径
+        projects = fs.list_projects()
+        project_path = None
+
+        for project in projects:
+            if project.get("project_id") == project_id:
+                project_path = project.get("project_path")
+                break
+
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 构建小说文件目录路径
+        source_dir = Path(project_path) / "source"
+
+        # 查找主要小说文件
+        primary_config_path = source_dir / ".primary_novel.txt"
+        primary_filename = None
+
+        if primary_config_path.exists():
+            with open(primary_config_path, 'r', encoding='utf-8') as f:
+                primary_filename = f.read().strip()
+
+        # 如果没有主要小说，查找第一个小说文件
+        if not primary_filename:
+            for file_path in source_dir.glob("*.txt"):
+                primary_filename = file_path.name
+                break
+
+        if not primary_filename:
+            return ApiResponse[List[dict]](
+                data=[],
+                message="未找到小说文件",
+                success=True
+            )
+
+        # 读取小说内容
+        novel_path = source_dir / primary_filename
+        if not novel_path.exists():
+            raise HTTPException(status_code=404, detail="小说文件不存在")
+
+        with open(novel_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 解析章节标题
+        chapters_by_number = {}
+
+        # 常见的章节标题模式
+        chapter_patterns = [
+            r'第[一二三四五六七八九十百千万零\d]+章[：:\s]*(.+?)(?=\n|$)',
+            r'第[一二三四五六七八九十百千万零\d]+节[：:\s]*(.+?)(?=\n|$)',
+            r'Chapter\s*\d+[：:\s]*(.+?)(?=\n|$)',
+            r'第\d+章[：:\s]*(.+?)(?=\n|$)',
+            r'【(.+?)】',
+            r'（(.+?)）',
+            r'\((.+?)\)',
+        ]
+
+        lines = content.split('\n')
+        chapter_index = 1
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 尝试匹配各种章节标题模式
+            for pattern in chapter_patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    chapter_title = match.group(1) if match.groups() else line
+
+                    # 提取章节编号
+                    chapter_num_match = re.search(r'第([一二三四五六七八九十百千万零\d]+)章', line)
+                    chapter_num = chapter_index  # 默认使用顺序编号
+
+                    if chapter_num_match:
+                        num_str = chapter_num_match.group(1)
+                        # 尝试转换中文数字
+                        chapter_num = convert_chinese_number_to_arabic(num_str) or chapter_index
+
+                    # 如果还没有这个章节编号的目录，创建一个
+                    if chapter_num not in chapters_by_number:
+                        chapters_by_number[chapter_num] = {
+                            "chapter_number": chapter_num,
+                            "chapter_title": f"第{chapter_num}章",
+                            "chapters": []
+                        }
+
+                    chapters_by_number[chapter_num]["chapters"].append({
+                        "chapter_id": f"chapter_{chapter_index:03d}",
+                        "title": chapter_title.strip(),
+                        "full_line": line
+                    })
+                    chapter_index += 1
+                    break
+
+        # 如果没有找到标准章节标题，尝试按段落分割
+        if not chapters_by_number:
+            paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+            for i, paragraph in enumerate(paragraphs[:20]):  # 最多取前20段
+                if len(paragraph) > 50:  # 只取有实质内容的段落
+                    chapter_num = i + 1
+                    # 取段落的前30个字符作为标题
+                    title = paragraph[:30] + "..." if len(paragraph) > 30 else paragraph
+
+                    # 如果还没有这个章节编号的目录，创建一个
+                    if chapter_num not in chapters_by_number:
+                        chapters_by_number[chapter_num] = {
+                            "chapter_number": chapter_num,
+                            "chapter_title": f"第{chapter_num}章",
+                            "chapters": []
+                        }
+
+                    chapters_by_number[chapter_num]["chapters"].append({
+                        "chapter_id": f"chapter_{chapter_num:03d}",
+                        "title": title,
+                        "full_line": title
+                    })
+
+        # 转换为列表格式并排序
+        chapters = sorted(list(chapters_by_number.values()), key=lambda x: x["chapter_number"])
+
+        return ApiResponse[List[dict]](
+            data=chapters,
+            message="获取小说章节成功",
+            success=True
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取小说章节失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取小说章节失败: {str(e)}")

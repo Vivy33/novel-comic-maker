@@ -121,21 +121,59 @@ def get_image_info(base64_data: str) -> dict:
         包含图像信息的字典
     """
     try:
-        # 提取MIME类型
+        # 初始化默认值
         mime_type = "unknown"
-        if ',' in base64_data:
-            header, _ = base64_data.split(',', 1)
-            if header.startswith('data:') and ';base64' in header:
-                mime_type = header.split(':')[1].split(';')[0]
+        base64_string = ""
 
-        # 获取数据大小
+        # 检查输入是否为空或无效
+        if not base64_data or not isinstance(base64_data, str):
+            logger.warning("输入的base64数据无效或为空")
+            return {
+                "mime_type": "unknown",
+                "encoded_size": 0,
+                "original_size": 0,
+                "compression_ratio": 0
+            }
+
+        # 提取MIME类型和base64字符串
         if ',' in base64_data:
-            _, base64_string = base64_data.split(',', 1)
+            header, base64_string = base64_data.split(',', 1)
+            # 安全地解析MIME类型
+            if header and isinstance(header, str) and header.startswith('data:'):
+                header_parts = header.split(':')
+                if len(header_parts) >= 2:
+                    mime_part = header_parts[1]
+                    if ';' in mime_part:
+                        mime_type = mime_part.split(';')[0]
+                    else:
+                        mime_type = mime_part
         else:
             base64_string = base64_data
 
+        # 验证base64字符串
+        if not base64_string:
+            logger.warning("未能提取到有效的base64字符串")
+            return {
+                "mime_type": mime_type,
+                "encoded_size": 0,
+                "original_size": 0,
+                "compression_ratio": 0
+            }
+
+        try:
+            # 尝试解码base64以验证数据有效性
+            decoded_data = base64.b64decode(base64_string)
+            original_size = len(decoded_data)
+        except Exception as decode_error:
+            logger.warning(f"base64解码失败: {decode_error}")
+            return {
+                "mime_type": mime_type,
+                "encoded_size": len(base64_string),
+                "original_size": 0,
+                "compression_ratio": 0
+            }
+
         data_size = len(base64_string)  # base64编码后的长度
-        original_size = len(base64.b64decode(base64_string))  # 原始数据大小
 
         return {
             "mime_type": mime_type,
@@ -322,7 +360,7 @@ class ImageProcessor:
 
     def __init__(self, temp_dir: Optional[str] = None):
         if temp_dir is None:
-            from ..config import settings
+            from config import settings
             temp_dir = str(settings.TEMP_DOWNLOADS_DIR)
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)

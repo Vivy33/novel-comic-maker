@@ -118,7 +118,7 @@ class CharacterConsistencyManager:
 
     async def _ai_extract_characters(self, text: str) -> List[CharacterProfile]:
         """使用AI提取角色信息"""
-        from ..services.ai_service import AIService
+        from services.ai_service import AIService
         ai_service = AIService()
 
         try:
@@ -165,7 +165,7 @@ class CharacterConsistencyManager:
             result = await ai_service.generate_text(
                 prompt=extraction_prompt,
                 model_preference="seedream",
-                max_tokens=2000,
+                max_tokens=8000,
                 temperature=0.3
             )
 
@@ -418,7 +418,7 @@ class CharacterConsistencyManager:
         project_path: str
     ) -> ConsistencyMatch:
         """AI辅助一致性检查"""
-        from ..services.ai_service import AIService
+        from services.ai_service import AIService
         ai_service = AIService()
 
         try:
@@ -468,7 +468,7 @@ class CharacterConsistencyManager:
             result = await ai_service.generate_text(
                 prompt=consistency_prompt,
                 model_preference="seedream",
-                max_tokens=800,
+                max_tokens=8000,
                 temperature=0.2
             )
 

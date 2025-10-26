@@ -9,8 +9,8 @@ Provides basic text-to-image generation functionality
 from fastapi import APIRouter, HTTPException, Form, Depends
 import logging
 
-from ..services.ai_service import AIService
-from ..models.text2image import Text2ImageResponse
+from services.ai_service import AIService
+from models.text2image import Text2ImageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,13 @@ def get_ai_service():
 @router.post("/generate", response_model=Text2ImageResponse)
 async def generate_image_from_text(
     prompt: str = Form(..., description="图像描述文本"),
-    model_preference: str = Form("seedream", description="首选模型"),
+    model_preference: str = Form("doubao-seedream-4-0-250828", description="首选模型"),
     size: str = Form("1024x1024", description="图像尺寸"),
     quality: str = Form("standard", description="图像质量"),
     style: str = Form("realistic", description="图像风格"),
+    sequential_generation: str = Form("auto", description="组图设置: auto 或 disabled"),
+    max_images: int = Form(1, description="最大生成图片数量 (1-5)"),
+    stream: bool = Form(True, description="是否启用流式输出"),
     ai_service: AIService = Depends(get_ai_service)
 ):
     """
@@ -44,7 +47,7 @@ async def generate_image_from_text(
             raise HTTPException(status_code=400, detail="描述文本不能超过1000个字符")
 
         # 验证尺寸参数
-        valid_sizes = ["512x512", "768x768", "1024x1024", "1536x1536"]
+        valid_sizes = ["512x512", "768x768", "1024x1024", "1536x1536", "1024x2048", "2048x1024"]
         if size not in valid_sizes:
             raise HTTPException(
                 status_code=400,
@@ -67,35 +70,100 @@ async def generate_image_from_text(
                 detail=f"支持的风格: {', '.join(valid_styles)}"
             )
 
+        # 验证组图参数
+        if sequential_generation not in ["auto", "disabled"]:
+            raise HTTPException(
+                status_code=400,
+                detail="组图设置只支持 'auto' 或 'disabled'"
+            )
+
+        # 验证图片数量参数
+        if not 1 <= max_images <= 5:
+            raise HTTPException(
+                status_code=400,
+                detail="最大生成图片数量必须在1-5之间"
+            )
+
         # 构建完整的提示词
         full_prompt = f"{prompt}, {style} style, high quality, detailed"
 
-        logger.info(f"开始生成图像 - 模型: {model_preference}, 尺寸: {size}, 提示: {prompt[:100]}...")
+        logger.info(f"开始生成图像 - 模型: {model_preference}, 尺寸: {size}, 组图: {sequential_generation}, 最大图片: {max_images}, 流式: {stream}")
 
         # 调用AI服务生成图像
         try:
-            image_url = await ai_service.generate_image(
+            result = await ai_service.generate_image(
                 prompt=full_prompt,
                 model_preference=model_preference,
                 size=size,
-                quality=quality
-            )
-
-            # 下载图像到本地
-            local_path = await ai_service.download_image_result(image_url)
-
-            logger.info(f"图像生成成功 - URL: {image_url}, 本地路径: {local_path}")
-
-            return Text2ImageResponse(
-                success=True,
-                image_url=image_url,
-                local_path=local_path,
-                prompt_used=full_prompt,
-                model_used=model_preference,
-                size=size,
                 quality=quality,
-                style=style
+                sequential_generation=sequential_generation,
+                max_images=max_images,
+                stream=stream
             )
+
+            if stream:
+                # 流式输出处理
+                from fastapi.responses import StreamingResponse
+                import json
+
+                async def generate_stream():
+                    try:
+                        # 火山引擎流式API的处理 - 使用同步迭代
+                        for event in result:
+                            if hasattr(event, 'type'):
+                                if event.type == "image_generation.partial_succeeded":
+                                    if hasattr(event, 'url') and event.url:
+                                        yield f"data: {json.dumps({'type': 'image', 'url': event.url, 'size': getattr(event, 'size', 'unknown'), 'image_index': getattr(event, 'image_index', 0)})}\n\n"
+                                elif event.type == "image_generation.completed":
+                                    if hasattr(event, 'usage'):
+                                        usage_data = event.usage.__dict__ if hasattr(event.usage, '__dict__') else str(event.usage)
+                                        yield f"data: {json.dumps({'type': 'completed', 'usage': usage_data})}\n\n"
+                                elif event.type == "image_generation.partial_failed":
+                                    if hasattr(event, 'error') and event.error:
+                                        yield f"data: {json.dumps({'type': 'error', 'error': str(event.error)})}\n\n"
+                    except Exception as e:
+                        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+                return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
+            else:
+                # 非流式输出处理
+                if isinstance(result, list):
+                    # 组图结果
+                    image_urls = result
+                    local_paths = []
+                    for url in image_urls:
+                        path = await ai_service.download_image_result(url)
+                        local_paths.append(path)
+
+                    return {
+                        "success": True,
+                        "image_urls": image_urls,
+                        "local_paths": local_paths,
+                        "total_generated": len(image_urls),
+                        "prompt_used": full_prompt,
+                        "model_used": model_preference,
+                        "size": size,
+                        "quality": quality,
+                        "style": style,
+                        "sequential_generation": sequential_generation,
+                        "max_images": max_images
+                    }
+                else:
+                    # 单图结果
+                    image_url = result
+                    local_path = await ai_service.download_image_result(image_url)
+
+                    return Text2ImageResponse(
+                        success=True,
+                        image_url=image_url,
+                        local_path=local_path,
+                        prompt_used=full_prompt,
+                        model_used=model_preference,
+                        size=size,
+                        quality=quality,
+                        style=style
+                    )
 
         except Exception as e:
             logger.error(f"AI图像生成失败: {e}")
@@ -117,7 +185,7 @@ async def generate_image_from_text(
 @router.post("/generate-batch")
 async def generate_images_batch(
     prompts: str = Form(..., description="多个图像描述，用分号分隔"),
-    model_preference: str = Form("seedream", description="首选模型"),
+    model_preference: str = Form("doubao-seedream-4-0-250828", description="首选模型"),
     size: str = Form("1024x1024", description="图像尺寸"),
     quality: str = Form("standard", description="图像质量"),
     style: str = Form("realistic", description="图像风格"),
@@ -217,7 +285,7 @@ async def get_text2image_models(ai_service: AIService = Depends(get_ai_service))
         return {
             "available_models": image_models,
             "total_count": len(image_models),
-            "recommended": "seedream"
+            "recommended": "doubao-seedream-4-0-250828"
         }
 
     except Exception as e:
@@ -341,8 +409,8 @@ async def enhance_prompt(
         try:
             enhanced_prompt = await ai_service.generate_text(
                 prompt=enhancement_prompt,
-                model_preference="seedream",
-                max_tokens=200,
+                model_preference="doubao-seedream-4-0-250828",
+                max_tokens=8000,
                 temperature=0.7
             )
 

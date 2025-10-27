@@ -1368,19 +1368,42 @@ class ProjectFileSystem:
             images_dir = chapter_dir / "images"
             if images_dir.exists():
                 logger.warning(f"缺少 panels.json，从 images 目录回退")
-                for image_file in sorted(images_dir.glob("*.png")):
-                    try:
-                        panel_id = int(image_file.stem.split('_')[2])
-                    except (ValueError, IndexError):
-                        panel_id = 0 # or some default
-                    
-                    panels.append(ComicPanel(
-                        panel_id=panel_id,
-                        description=f"画面 {panel_id}",
-                        image_path=f"/projects/{project_identifier}/chapters/{chapter_id}/images/{image_file.name}",
-                        confirmed=False,
-                        generated_at=datetime.fromtimestamp(image_file.stat().st_ctime).isoformat()
-                    ))
+                # 处理新的分段目录结构: segment_XX/scene_option_1_xxx.png
+                segment_dirs = sorted([d for d in images_dir.iterdir() if d.is_dir() and d.name.startswith("segment_")])
+
+                panel_id = 1
+                for segment_dir in segment_dirs:
+                    # 在每个分段目录中查找图片
+                    for image_file in sorted(segment_dir.glob("*.png")):
+                        # 从文件名解析信息
+                        filename_parts = image_file.stem.split('_')
+                        description = f"分段 {segment_dir.name.replace('segment_', '')} - 画面 {panel_id}"
+
+                        panels.append(ComicPanel(
+                            panel_id=panel_id,
+                            description=description,
+                            image_path=f"/projects/{project_identifier}/chapters/{chapter_id}/images/{segment_dir.name}/{image_file.name}",
+                            confirmed=False,
+                            generated_at=datetime.fromtimestamp(image_file.stat().st_ctime).isoformat(),
+                            paragraph_id=segment_dir.name.replace('segment_', '')
+                        ))
+                        panel_id += 1
+
+                # 如果没有找到分段目录中的图片，尝试在images目录直接查找（兼容旧结构）
+                if not panels:
+                    for image_file in sorted(images_dir.glob("*.png")):
+                        try:
+                            panel_id = int(image_file.stem.split('_')[2])
+                        except (ValueError, IndexError):
+                            panel_id = 0 # or some default
+
+                        panels.append(ComicPanel(
+                            panel_id=panel_id,
+                            description=f"画面 {panel_id}",
+                            image_path=f"/projects/{project_identifier}/chapters/{chapter_id}/images/{image_file.name}",
+                            confirmed=False,
+                            generated_at=datetime.fromtimestamp(image_file.stat().st_ctime).isoformat()
+                        ))
 
         # 生成段落分组信息
         paragraphs = self._generate_paragraph_groups(panels, story_text)
@@ -1440,9 +1463,12 @@ class ProjectFileSystem:
             paragraph_index = 1
             try:
                 if paragraph_id.startswith("segment_"):
+                    # 直接使用字符串中的数字部分，保持原有的顺序
                     paragraph_index = int(paragraph_id.split("_")[1])
                 elif paragraph_id.startswith("paragraph_"):
                     paragraph_index = int(paragraph_id.split("_")[1])
+                elif paragraph_id.isdigit():
+                    paragraph_index = int(paragraph_id)
             except (ValueError, IndexError):
                 paragraph_index = 1
 

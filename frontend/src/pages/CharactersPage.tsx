@@ -113,7 +113,14 @@ const CharactersPage: React.FC = () => {
   });
 
   // charactersData 是从 API 返回的数组，使用 useMemo 优化性能
-  const characters = useMemo(() => charactersData ?? [], [charactersData]);
+  // 确保始终返回数组（防御性检查）
+  const characters = useMemo(() => {
+    if (!charactersData) {
+      return [];
+    }
+    // 确保返回的是数组
+    return Array.isArray(charactersData) ? charactersData : [];
+  }, [charactersData]);
 
   // 添加调试日志
   console.log('CharactersPage 调试信息:', {

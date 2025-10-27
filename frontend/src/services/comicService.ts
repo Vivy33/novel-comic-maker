@@ -244,7 +244,7 @@ class ComicService {
    * 设置主封面
    */
   async setPrimaryCover(projectId: string, coverId: string): Promise<any> {
-    const response = await apiClient.httpClient.put(`${this.baseUrl}/${projectId}/covers/${coverId}/set-primary`);
+    const response = await apiClient.put(`${this.baseUrl}/${projectId}/covers/${coverId}/set-primary`);
     return response;
   }
 
@@ -252,7 +252,7 @@ class ComicService {
    * 删除封面
    */
   async deleteCover(projectId: string, coverId: string): Promise<any> {
-    const response = await apiClient.httpClient.delete(`${this.baseUrl}/${projectId}/covers/${coverId}`);
+    const response = await apiClient.delete(`${this.baseUrl}/${projectId}/covers/${coverId}`);
     return response;
   }
 
@@ -268,7 +268,7 @@ class ComicService {
    * 批量确认图片
    */
   async batchConfirmPanels(projectId: string, chapterId: string, panelIds: number[]): Promise<any> {
-    const response = await apiClient.httpClient.put(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/batch-confirm`, {
+    const response = await apiClient.put(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/batch-confirm`, {
       panel_ids: panelIds
     });
     return response;
@@ -310,7 +310,7 @@ class ComicService {
    * 导出章节
    */
   async exportChapter(projectId: string, chapterId: string): Promise<any> {
-    const response = await apiClient.httpClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/export`, {});
+    const response = await apiClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/export`, {});
     return response;
   }
 
@@ -318,7 +318,7 @@ class ComicService {
    * 重新生成章节
    */
   async regenerateChapter(projectId: string, chapterId: string): Promise<any> {
-    const response = await apiClient.httpClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/regenerate`, {});
+    const response = await apiClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/regenerate`, {});
     return response;
   }
 

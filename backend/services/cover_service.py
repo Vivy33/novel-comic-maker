@@ -600,6 +600,7 @@ class CoverService:
 
             cover_deleted = False
             cover_data = None
+            image_files_to_delete = []
 
             # 首先尝试从传统目录查找并删除（向后兼容）
             cover_file = project_path / "covers" / f"{cover_id}.json"
@@ -631,15 +632,78 @@ class CoverService:
                         cover_deleted = True
                         logger.info(f"从章节封面目录删除封面文件: {chapter_cover_file}")
 
+            # 如果没有找到单独的JSON文件，从封面列表中查找
             if not cover_deleted:
-                logger.warning(f"封面 {cover_id} 的文件未找到")
+                logger.info(f"未找到单独的封面JSON文件，从封面列表中查找 {cover_id}")
+
+                # 检查所有可能的封面列表文件
+                list_files_to_check = [
+                    project_path / "covers" / "covers_list.json",
+                    project_path / "covers" / "project" / "covers_list.json",
+                    project_path / "covers" / "chapters" / "covers_list.json"
+                ]
+
+                for list_file in list_files_to_check:
+                    if list_file.exists():
+                        try:
+                            with open(list_file, 'r', encoding='utf-8') as f:
+                                covers_list = json.load(f)
+
+                            # 查找目标封面
+                            for cover in covers_list:
+                                if cover.get("cover_id") == cover_id:
+                                    cover_data = cover
+                                    cover_deleted = True
+                                    logger.info(f"在封面列表 {list_file} 中找到封面 {cover_id}")
+                                    break
+
+                            if cover_deleted:
+                                break
+                        except Exception as e:
+                            logger.warning(f"读取封面列表文件 {list_file} 失败: {e}")
+                            continue
+
+            # 如果找到了封面数据，执行删除操作
+            if not cover_deleted:
+                logger.warning(f"封面 {cover_id} 未找到，无法删除")
             else:
-                # 删除本地图片文件（如果存在）
-                covers_dir = project_path / "covers"
-                for img_file in covers_dir.rglob(f"{cover_id}*"):
-                    if img_file.is_file() and img_file.name.startswith(cover_id):
+                # 收集需要删除的图片文件
+                if cover_data:
+                    # 从封面数据中提取图片路径
+                    if "image_path" in cover_data and cover_data["image_path"]:
+                        image_path = Path(cover_data["image_path"])
+                        if image_path.exists():
+                            image_files_to_delete.append(image_path)
+                            logger.info(f"找到图片文件: {image_path}")
+
+                    if "local_path" in cover_data and cover_data["local_path"]:
+                        local_path = Path(cover_data["local_path"])
+                        if local_path.exists():
+                            image_files_to_delete.append(local_path)
+                            logger.info(f"找到本地图片文件: {local_path}")
+
+                    # 通过文件名模式匹配查找相关图片文件
+                    covers_dir = project_path / "covers"
+                    for img_file in covers_dir.rglob("*"):
+                        if img_file.is_file() and (
+                            img_file.name.startswith(cover_id) or
+                            img_file.name.endswith(f"{cover_id}.png") or
+                            img_file.name.endswith(f"{cover_id}.jpg") or
+                            img_file.name.endswith(f"{cover_id}.jpeg")
+                        ):
+                            if img_file not in image_files_to_delete:
+                                image_files_to_delete.append(img_file)
+                                logger.info(f"通过模式匹配找到图片文件: {img_file}")
+
+                # 删除所有找到的图片文件
+                deleted_images = []
+                for img_file in image_files_to_delete:
+                    try:
                         img_file.unlink()
-                        logger.info(f"删除图片文件: {img_file}")
+                        deleted_images.append(str(img_file))
+                        logger.info(f"成功删除图片文件: {img_file}")
+                    except Exception as e:
+                        logger.error(f"删除图片文件失败 {img_file}: {e}")
 
                 # 更新所有相关的封面列表文件
                 list_files_to_update = [
@@ -648,23 +712,28 @@ class CoverService:
                     project_path / "covers" / "chapters" / "covers_list.json"
                 ]
 
+                lists_updated = 0
                 for list_file in list_files_to_update:
                     if list_file.exists():
-                        with open(list_file, 'r', encoding='utf-8') as f:
-                            covers_list = json.load(f)
+                        try:
+                            with open(list_file, 'r', encoding='utf-8') as f:
+                                covers_list = json.load(f)
 
-                        # 移除指定的封面
-                        original_length = len(covers_list)
-                        covers_list = [cover for cover in covers_list if cover.get("cover_id") != cover_id]
+                            # 移除指定的封面
+                            original_length = len(covers_list)
+                            covers_list = [cover for cover in covers_list if cover.get("cover_id") != cover_id]
 
-                        # 如果有删除，保存更新后的列表
-                        if len(covers_list) != original_length:
-                            with open(list_file, 'w', encoding='utf-8') as f:
-                                json.dump(covers_list, f, ensure_ascii=False, indent=2)
-                            logger.info(f"更新封面列表文件: {list_file}")
+                            # 如果有删除，保存更新后的列表
+                            if len(covers_list) != original_length:
+                                with open(list_file, 'w', encoding='utf-8') as f:
+                                    json.dump(covers_list, f, ensure_ascii=False, indent=2)
+                                logger.info(f"更新封面列表文件: {list_file}，删除了 {original_length - len(covers_list)} 个条目")
+                                lists_updated += 1
+                        except Exception as e:
+                            logger.error(f"更新封面列表文件 {list_file} 失败: {e}")
 
-            logger.info(f"封面 {cover_id} 删除成功")
-            return True
+                logger.info(f"封面 {cover_id} 删除成功，删除了 {len(deleted_images)} 个图片文件，更新了 {lists_updated} 个列表文件")
+                return True
 
         except Exception as e:
             logger.error(f"删除封面失败: {e}")

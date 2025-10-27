@@ -28,6 +28,8 @@ import {
   Edit as EditIcon,
   Delete as DeleteIcon,
   MoreVert as MoreIcon,
+  Image as ImageIcon,
+  Star as StarIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -226,6 +228,65 @@ const ProjectsPage: React.FC = () => {
                     },
                   }}
                 >
+                  {/* 封面图片区域 */}
+                  <Box sx={{ position: 'relative', height: 200, overflow: 'hidden' }}>
+                    {project.primary_cover ? (
+                      <>
+                        <img
+                          src={project.primary_cover.thumbnail_url}
+                          alt={project.primary_cover.title || project.name}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                          }}
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.style.display = 'none';
+                          }}
+                        />
+                        {/* 主封面标识 */}
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            top: 8,
+                            right: 8,
+                            backgroundColor: 'rgba(255, 215, 0, 0.9)',
+                            color: '#000',
+                            borderRadius: '50%',
+                            width: 32,
+                            height: 32,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                          }}
+                          title="主封面"
+                        >
+                          <StarIcon sx={{ fontSize: 18 }} />
+                        </Box>
+                      </>
+                    ) : (
+                      <Box
+                        sx={{
+                          width: '100%',
+                          height: '100%',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: 'grey.100',
+                          color: 'grey.500',
+                        }}
+                      >
+                        <ImageIcon sx={{ fontSize: 48, mb: 1 }} />
+                        <Typography variant="body2" color="text.secondary">
+                          暂无封面
+                        </Typography>
+                      </Box>
+                    )}
+                  </Box>
+
                   <CardContent sx={{ flexGrow: 1 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
                       <Typography variant="h6" component="h2" sx={{ flexGrow: 1, mr: 1 }}>
@@ -245,7 +306,7 @@ const ProjectsPage: React.FC = () => {
                         sx={{
                           mb: 2,
                           display: '-webkit-box',
-                          WebkitLineClamp: 3,
+                          WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
                           overflow: 'hidden',
                         }}

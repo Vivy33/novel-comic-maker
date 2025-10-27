@@ -57,6 +57,7 @@ class Project(BaseModel):
     updated_at: Optional[str] = None
     status: str
     metadata: Optional[Dict[str, Any]] = None
+    primary_cover: Optional[Dict[str, Any]] = None
 
 
 class HistoryRecord(BaseModel):

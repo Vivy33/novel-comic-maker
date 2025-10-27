@@ -36,8 +36,8 @@ class TaskStatus(BaseModel):
 class ComicPanel(BaseModel):
     """漫画面板/分镜画面"""
     panel_id: int
-    description: str
-    scene_description: str
+    description: Optional[str] = None  # 改为可选，提供向后兼容性
+    scene_description: Optional[str] = None  # 改为可选，提供向后兼容性
     characters: List[str] = []
     scene: str = ""
     emotion: str = ""
@@ -46,6 +46,10 @@ class ComicPanel(BaseModel):
     generated_at: Optional[str] = None
     updated_at: Optional[str] = None
 
+    # 新增字段：段落关联信息
+    paragraph_id: Optional[str] = None  # 段落ID，用于段落分组
+    paragraph_index: Optional[int] = None  # 段落序号，用于排序
+    notes: Optional[str] = None  # 分镜备注
 
 class ChapterComic(BaseModel):
     """故事章节漫画 - 一个故事章节包含多个分镜画面"""
@@ -125,6 +129,16 @@ class ProjectCoversResponse(BaseModel):
     total_covers: int = 0
 
 
+class ParagraphInfo(BaseModel):
+    """段落信息 - 包含段落文本和关联的分镜图"""
+    paragraph_id: str
+    paragraph_index: int
+    content: str  # 段落文本内容
+    panels: List[ComicPanel] = []  # 该段落的分镜图
+    panel_count: int = 0  # 分镜图数量
+    confirmed_count: int = 0  # 已确认的分镜图数量
+
+
 class ChapterDetail(BaseModel):
     """故事章节详情"""
     chapter_id: str
@@ -134,8 +148,9 @@ class ChapterDetail(BaseModel):
     status: str
     story_text: Optional[str] = None  # 原始故事文本
     script: Optional[Dict[str, Any]] = None  # 分镜脚本
-    panels: Optional[List[ComicPanel]] = None  # 该章节的所有分镜画面
+    panels: Optional[List[ComicPanel]] = None  # 该章节的所有分镜画面（保持兼容性）
     images: Optional[List[ChapterImage]] = None  # 兼容性字段
+    paragraphs: Optional[List[ParagraphInfo]] = None  # 段落分组数据（新增）
 
     # 统计信息
     total_panels: int = 0
@@ -185,6 +200,19 @@ class ProjectChaptersInfo(BaseModel):
     pending_chapters: int = 0
 
 
+class PanelEditOperation(BaseModel):
+    """分镜图编辑操作"""
+    type: str  # reorder, delete, update_notes, reassign_paragraph
+    panel_ids: List[int]
+    data: Optional[Dict[str, Any]] = None  # 操作相关数据
+
+
+class PanelBatchRequest(BaseModel):
+    """分镜图批量操作请求"""
+    chapter_id: str
+    operations: List[PanelEditOperation]
+
+
 class StorySegment(BaseModel):
     """故事段落 - 用于生成漫画的故事文本段落"""
     segment_id: str
@@ -192,3 +220,9 @@ class StorySegment(BaseModel):
     text: str
     created_at: str
     processed: bool = False  # 是否已处理生成漫画
+
+
+class ChapterCreateRequest(BaseModel):
+    """章节创建请求"""
+    title: str = "新章节"
+    chapter_number: Optional[int] = None  # 为None时自动分配

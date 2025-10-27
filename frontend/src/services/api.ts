@@ -23,6 +23,11 @@ export interface Project {
   updated_at: string;
   status: 'created' | 'in_progress' | 'completed' | 'error';
   metadata?: Record<string, any>;
+  primary_cover?: {
+    cover_id: string;
+    thumbnail_url: string;
+    title?: string;
+  };
 }
 
 // 角色接口

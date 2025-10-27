@@ -1,5 +1,5 @@
-import apiClient, { ApiResponse, Comic, ComicPage, TextAnalysis, ScriptGeneration, Chapter, ChapterDetail, ChapterImage, ComicExportOptions } from './api';
-import axios from 'axios';
+import apiClient, { ApiResponse, Comic, ComicPage, TextAnalysis, ScriptGeneration } from './api';
+import { ChapterInfo, CoverInfo, ProjectCoversResponse, ChapterDetail, ComicPanel } from '../models/comic';
 
 export interface CreateComicRequest {
   project_id: string;
@@ -41,8 +41,8 @@ class ComicService {
    * 获取项目的所有漫画
    */
   async getProjectComics(projectId: string): Promise<Comic[]> {
-    const response = await axios.get<Comic[]>(`${this.baseUrl}/project/${projectId}`);
-    return response.data;
+    const response = await apiClient.get<Comic[]>(`${this.baseUrl}/project/${projectId}`);
+    return response;
   }
 
   /**
@@ -50,7 +50,7 @@ class ComicService {
    */
   async getComic(id: string): Promise<Comic> {
     const response = await apiClient.get<Comic>(`${this.baseUrl}/${id}`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -58,7 +58,7 @@ class ComicService {
    */
   async createComic(data: CreateComicRequest): Promise<Comic> {
     const response = await apiClient.post<Comic>(this.baseUrl, data);
-    return response.data;
+    return response;
   }
 
   /**
@@ -66,7 +66,7 @@ class ComicService {
    */
   async generateComic(data: GenerateComicRequest): Promise<Comic> {
     const response = await apiClient.post<Comic>(`${this.baseUrl}/generate`, data);
-    return response.data;
+    return response;
   }
 
   /**
@@ -86,7 +86,7 @@ class ComicService {
       estimated_time_remaining?: number;
       error_message?: string;
     }>(`${this.baseUrl}/${comicId}/generation-status`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -94,7 +94,7 @@ class ComicService {
    */
   async getComicPages(comicId: string): Promise<ComicPage[]> {
     const response = await apiClient.get<ComicPage[]>(`${this.baseUrl}/${comicId}/pages`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -118,7 +118,7 @@ class ComicService {
       }>;
       cover_image_url?: string;
     }>(`${this.baseUrl}/generate-pages`, data);
-    return response.data;
+    return response;
   }
 
   /**
@@ -132,7 +132,7 @@ class ComicService {
       text,
       ...options,
     });
-    return response.data;
+    return response;
   }
 
   /**
@@ -151,7 +151,7 @@ class ComicService {
       style_requirements: styleRequirements,
       ...options,
     });
-    return response.data;
+    return response;
   }
 
   /**
@@ -167,7 +167,7 @@ class ComicService {
     }
   ): Promise<ComicPage> {
     const response = await apiClient.post<ComicPage>(`${this.baseUrl}/${comicId}/pages/${pageNumber}/regenerate`, modifications);
-    return response.data;
+    return response;
   }
 
   /**
@@ -193,7 +193,7 @@ class ComicService {
       format,
       options,
     });
-    return response.data;
+    return response;
   }
 
   /**
@@ -225,6 +225,72 @@ class ComicService {
   }
 
   /**
+   * 获取项目章节列表
+   */
+  async getChapters(projectId: string): Promise<ChapterInfo[]> {
+    const response = await apiClient.get<ChapterInfo[]>(`${this.baseUrl}/${projectId}/chapters`);
+    return response;
+  }
+
+  /**
+   * 获取项目封面（分层级展示）
+   */
+  async getProjectCovers(projectId: string): Promise<ProjectCoversResponse> {
+    const response = await apiClient.get<ProjectCoversResponse>(`${this.baseUrl}/${projectId}/covers`);
+    return response;
+  }
+
+  /**
+   * 设置主封面
+   */
+  async setPrimaryCover(projectId: string, coverId: string): Promise<any> {
+    const response = await apiClient.httpClient.put(`${this.baseUrl}/${projectId}/covers/${coverId}/set-primary`);
+    return response;
+  }
+
+  /**
+   * 删除封面
+   */
+  async deleteCover(projectId: string, coverId: string): Promise<any> {
+    const response = await apiClient.httpClient.delete(`${this.baseUrl}/${projectId}/covers/${coverId}`);
+    return response;
+  }
+
+  /**
+   * 获取章节详情
+   */
+  async getChapterDetail(projectId: string, chapterId: string): Promise<ChapterDetail> {
+    const response = await apiClient.get<ChapterDetail>(`${this.baseUrl}/${projectId}/chapters/${chapterId}`);
+    return response;
+  }
+
+  /**
+   * 批量确认图片
+   */
+  async batchConfirmPanels(projectId: string, chapterId: string, panelIds: number[]): Promise<any> {
+    const response = await apiClient.httpClient.put(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/batch-confirm`, {
+      panel_ids: panelIds
+    });
+    return response;
+  }
+
+  /**
+   * 导出章节
+   */
+  async exportChapter(projectId: string, chapterId: string): Promise<any> {
+    const response = await apiClient.httpClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/export`, {});
+    return response;
+  }
+
+  /**
+   * 重新生成章节
+   */
+  async regenerateChapter(projectId: string, chapterId: string): Promise<any> {
+    const response = await apiClient.httpClient.post(`${this.baseUrl}/${projectId}/chapters/${chapterId}/regenerate`, {});
+    return response;
+  }
+
+  /**
    * 获取漫画模板
    */
   async getComicTemplates(): Promise<Array<{
@@ -243,118 +309,7 @@ class ComicService {
       manga_type: string;
       art_style: string;
     }>>(`${this.baseUrl}/templates`);
-    return response.data;
-  }
-
-  // ==================== 章节管理API ====================
-
-  /**
-   * 获取项目的所有章节
-   */
-  async getProjectChapters(projectId: string): Promise<Chapter[]> {
-    const response = await axios.get<Chapter[]>(`${this.baseUrl}/${projectId}/chapters`);
-    return response.data;
-  }
-
-  /**
-   * 获取章节详情
-   */
-  async getChapterDetail(projectId: string, chapterId: string): Promise<ChapterDetail> {
-    const response = await axios.get<ChapterDetail>(`${this.baseUrl}/${projectId}/chapters/${chapterId}`);
-    return response.data;
-  }
-
-  /**
-   * 重新生成章节
-   */
-  async regenerateChapter(projectId: string, chapterId: string, options?: {
-    regenerate_images_only?: boolean;
-    panel_ids?: number[];
-    style_changes?: string;
-  }): Promise<{ task_id: string }> {
-    const response = await axios.post<{ task_id: string }>(`${this.baseUrl}/${projectId}/chapters/${chapterId}/regenerate`, options);
-    return response.data;
-  }
-
-  /**
-   * 删除章节
-   */
-  async deleteChapter(projectId: string, chapterId: string): Promise<void> {
-    await apiClient.delete(`${this.baseUrl}/${projectId}/chapters/${chapterId}`);
-  }
-
-  /**
-   * 删除章节中的特定画面
-   */
-  async deleteChapterPanel(projectId: string, chapterId: string, panelId: number): Promise<void> {
-    await axios.delete(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/${panelId}`);
-  }
-
-  /**
-   * 确认/取消确认画面
-   */
-  async updatePanelConfirmation(projectId: string, chapterId: string, panelId: number, confirmed: boolean): Promise<void> {
-    await axios.put(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/${panelId}/confirm`, { confirmed });
-  }
-
-  /**
-   * 批量确认画面
-   */
-  async batchConfirmPanels(projectId: string, chapterId: string, panelIds: number[], confirmed: boolean): Promise<void> {
-    await axios.put(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/batch-confirm`, {
-      panel_ids: panelIds,
-      confirmed
-    });
-  }
-
-  /**
-   * 导出章节
-   */
-  async exportChapter(projectId: string, chapterId: string, options: ComicExportOptions): Promise<{
-    download_url: string;
-    file_size: number;
-  }> {
-    const response = await axios.post<{
-      download_url: string;
-      file_size: number;
-    }>(`${this.baseUrl}/${projectId}/chapters/${chapterId}/export`, options);
-    return response.data;
-  }
-
-  /**
-   * 导出整个项目的漫画
-   */
-  async exportProjectComics(projectId: string, options: ComicExportOptions): Promise<{
-    download_url: string;
-    file_size: number;
-  }> {
-    const response = await apiClient.post<{
-      download_url: string;
-      file_size: number;
-    }>(`${this.baseUrl}/${projectId}/export`, options);
-    return response.data;
-  }
-
-  /**
-   * 获取重新生成任务状态
-   */
-  async getRegenerateStatus(taskId: string): Promise<{
-    status: 'pending' | 'running' | 'completed' | 'failed';
-    progress: number;
-    current_step?: string;
-    estimated_time_remaining?: number;
-    error_message?: string;
-    result?: any;
-  }> {
-    const response = await apiClient.get<{
-      status: 'pending' | 'running' | 'completed' | 'failed';
-      progress: number;
-      current_step?: string;
-      estimated_time_remaining?: number;
-      error_message?: string;
-      result?: any;
-    }>(`${this.baseUrl}/regenerate/${taskId}/status`);
-    return response.data;
+    return response;
   }
 }
 

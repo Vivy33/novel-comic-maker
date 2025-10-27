@@ -55,6 +55,13 @@ class CoverService:
         """
         try:
             logger.info(f"开始生成封面 - 项目: {project_id}, 类型: {cover_type}")
+            # 调试日志：打印所有输入参数
+            logger.info(f"🔍 调试：收到封面生成请求")
+            logger.info(f"🔍 调试：cover_type = {cover_type}")
+            logger.info(f"🔍 调试：novel_filename = {novel_filename}")
+            logger.info(f"🔍 调试：cover_prompt = '{cover_prompt}' (长度: {len(cover_prompt)})")
+            logger.info(f"🔍 调试：cover_size = {cover_size}")
+            logger.info(f"🔍 调试：reference_image = {reference_image}")
 
             # 获取项目路径
             if not file_system:
@@ -156,37 +163,94 @@ class CoverService:
         reference_image_path: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        生成封面图像
+        生成封面图像 - 直接使用seedream，不进行任何AI分析
         """
         try:
-            # 直接使用用户输入的描述，不进行AI分析
+            # 完全使用用户输入的描述，不添加任何修饰词
             final_prompt = description
 
-            # 如果有参考图片，添加一致性要求
-            if reference_image_path:
-                logger.info(f"📸 使用参考图片: {reference_image_path}")
-                # 添加基础的参考图一致性提示
-                consistency_prompt = """
-
-请保持与参考图片相同的角色外观、服装、发型和绘画风格，确保整体视觉一致性。
-"""
-                final_prompt = description + consistency_prompt
-            else:
-                logger.info(f"ℹ️ 未提供参考图片，使用原始描述")
-
-            # 添加质量要求
-            final_prompt = f"{final_prompt}，高质量漫画封面，色彩鲜明，构图均衡"
-
-            # 调用AI服务生成图像
             logger.info(f"🎨 开始生成图像，尺寸: {size}")
             logger.info(f"📝 最终prompt: {final_prompt}")
-            result = await self.ai_service.generate_image(
-                prompt=final_prompt,
-                size=size,
-                quality="standard"
-            )
 
-            return result
+            if reference_image_path:
+                # 使用参考图片进行图生图
+                logger.info(f"📸 使用参考图片进行图生图: {reference_image_path}")
+
+                # 读取参考图片并转换为base64
+                import base64
+                try:
+                    with open(reference_image_path, 'rb') as f:
+                        image_data = f.read()
+                    image_base64 = base64.b64encode(image_data).decode('utf-8')
+                    logger.info(f"✅ 参考图片已转换为base64，大小: {len(image_base64)} 字符")
+                except Exception as e:
+                    logger.error(f"读取参考图片失败: {e}")
+                    image_base64 = None
+
+                if image_base64:
+                    # 直接调用底层provider的图生图API，不进行任何AI分析
+                    logger.info(f"🔄 调用seedream图生图API，prompt长度: {len(final_prompt)}, 图片大小: {len(image_base64)}")
+                    result = self.ai_service.provider.image_to_image(
+                        model="doubao-seedream-4-0-250828",
+                        prompt=final_prompt,
+                        image_url="",  # 空URL，使用base64
+                        image_base64=image_base64
+                    )
+                    logger.info(f"🔄 seedream图生图API返回: {type(result)} - {result}")
+
+                    # 如果image_to_image失败，降级到普通文生图但不添加AI分析
+                    if result is None:
+                        logger.warning("图生图API失败，降级到文生图（不进行AI分析）")
+                        result = self.ai_service.provider.text_to_image(
+                            model="doubao-seedream-4-0-250828",
+                            prompt=final_prompt,
+                            size=size,
+                            sequential_generation="auto",
+                            max_images=1,
+                            stream=False
+                        )
+                else:
+                    # 参考图片读取失败，使用普通文生图
+                    logger.warning("参考图片读取失败，使用普通文生图")
+                    result = self.ai_service.provider.text_to_image(
+                        model="doubao-seedream-4-0-250828",
+                        prompt=final_prompt,
+                        size=size,
+                        sequential_generation="auto",
+                        max_images=1,
+                        stream=False
+                    )
+            else:
+                # 纯文本生图，不进行任何AI分析
+                logger.info(f"ℹ️ 未提供参考图片，使用纯文本生图")
+                result = self.ai_service.provider.text_to_image(
+                    model="doubao-seedream-4-0-250828",
+                    prompt=final_prompt,
+                    size=size,
+                    sequential_generation="auto",
+                    max_images=1,
+                    stream=False
+                )
+
+            if result is None:
+                raise Exception("seedream图像生成返回空结果")
+
+            # 处理不同类型的返回结果
+            image_url = None
+            if isinstance(result, str):
+                image_url = result
+            elif isinstance(result, dict):
+                # 如果返回的是字典，尝试获取常见的URL字段
+                image_url = result.get("image_url") or result.get("url") or result.get("image")
+            else:
+                logger.error(f"❌ seedream返回了意外的结果类型: {type(result)}, 内容: {result}")
+                raise Exception(f"seedream返回了意外的结果类型: {type(result)}")
+
+            if not image_url:
+                raise Exception("无法从seedream结果中提取图像URL")
+
+            logger.info(f"✅ seedream图像生成成功，URL: {image_url}")
+            return {"image_url": image_url}
 
         except Exception as e:
             logger.error(f"生成封面图像失败: {e}")
@@ -298,9 +362,16 @@ class CoverService:
         保存参考图片到项目目录，使用专门的参考图片目录
         """
         try:
+            logger.info(f"🔍 后端调试：开始保存参考图片")
+            logger.info(f"🔍 后端调试：reference_image.filename = {reference_image.filename}")
+            logger.info(f"🔍 后端调试：reference_image.content_type = {reference_image.content_type}")
+            logger.info(f"🔍 后端调试：reference_image.size = {reference_image.size}")
+            logger.info(f"🔍 后端调试：project_path = {project_path}")
+
             # 创建专门的参考图目录
             ref_images_dir = project_path / "covers" / "reference_images"
             ref_images_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"✅ 后端调试：参考图片目录已创建: {ref_images_dir}")
 
             # 生成唯一文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -311,17 +382,34 @@ class CoverService:
                 safe_filename = "reference"
             filename = f"ref_{timestamp}_{safe_filename}{file_extension}"
             file_path = ref_images_dir / filename
+            logger.info(f"✅ 后端调试：生成文件名: {filename}")
+            logger.info(f"✅ 后端调试：完整文件路径: {file_path}")
 
             # 保存文件内容
+            logger.info(f"🔄 后端调试：开始读取文件内容")
             file_content = await reference_image.read()
+            logger.info(f"✅ 后端调试：文件内容读取完成，大小: {len(file_content)} bytes")
+
+            logger.info(f"💾 后端调试：开始写入文件到磁盘")
             with open(file_path, "wb") as buffer:
                 buffer.write(file_content)
 
-            logger.info(f"参考图已保存: {file_path} (大小: {len(file_content)} bytes)")
-            return str(file_path.relative_to(project_path))
+            # 验证文件是否成功写入
+            if file_path.exists():
+                actual_size = file_path.stat().st_size
+                logger.info(f"✅ 后端调试：文件写入成功，实际大小: {actual_size} bytes")
+            else:
+                logger.error(f"❌ 后端调试：文件写入失败，文件不存在")
+                raise Exception("文件写入失败")
+
+            logger.info(f"✅ 参考图已保存: {file_path} (大小: {len(file_content)} bytes)")
+            # 返回绝对路径，避免后续读取时找不到文件
+            return str(file_path)
 
         except Exception as e:
-            logger.error(f"保存参考图失败: {e}")
+            logger.error(f"❌ 保存参考图失败: {e}")
+            import traceback
+            logger.error(f"❌ 详细错误信息: {traceback.format_exc()}")
             raise
 
     def get_project_covers(self, project_id: str, file_system: ProjectFileSystem) -> List[Dict[str, Any]]:
@@ -336,28 +424,45 @@ class CoverService:
             project_path = Path(project_path_str)
 
             covers_list = []
+            processed_cover_ids = set()
 
-            # 首先尝试从传统目录结构获取封面列表（向后兼容）
+            # 1. 优先读取根目录的 covers_list.json (兼容旧结构)
             covers_list_file = project_path / "covers" / "covers_list.json"
             if covers_list_file.exists():
+                logger.info(f"发现旧版封面列表文件: {covers_list_file}")
                 with open(covers_list_file, 'r', encoding='utf-8') as f:
-                    covers_list = json.load(f)
+                    try:
+                        old_covers = json.load(f)
+                        if isinstance(old_covers, list):
+                            covers_list.extend(old_covers)
+                            processed_cover_ids.update(c.get("cover_id") for c in old_covers)
+                            logger.info(f"从旧版列表加载了 {len(old_covers)} 个封面")
+                    except json.JSONDecodeError:
+                        logger.warning(f"无法解析旧版封面列表: {covers_list_file}")
 
-            # 如果传统列表为空，尝试从新的分层目录结构获取封面
-            if not covers_list:
-                # 从项目封面目录获取
-                project_covers_file = project_path / "covers" / "project" / "covers_list.json"
-                if project_covers_file.exists():
-                    with open(project_covers_file, 'r', encoding='utf-8') as f:
-                        project_covers = json.load(f)
-                        covers_list.extend(project_covers)
-
-                # 从章节封面目录获取
-                chapter_covers_file = project_path / "covers" / "chapters" / "covers_list.json"
-                if chapter_covers_file.exists():
-                    with open(chapter_covers_file, 'r', encoding='utf-8') as f:
-                        chapter_covers = json.load(f)
-                        covers_list.extend(chapter_covers)
+            # 2. 扫描子目录中的 .json 文件 (新结构)
+            subdirs_to_scan = [
+                project_path / "covers" / "project",
+                project_path / "covers" / "chapters"
+            ]
+            for subdir in subdirs_to_scan:
+                if subdir.exists():
+                    logger.info(f"扫描新版封面目录: {subdir}")
+                    for json_file in subdir.glob("*.json"):
+                        if json_file.name == "covers_list.json":
+                            continue
+                        try:
+                            with open(json_file, 'r', encoding='utf-8') as f:
+                                cover_data = json.load(f)
+                                if isinstance(cover_data, dict) and "cover_id" in cover_data:
+                                    if cover_data["cover_id"] not in processed_cover_ids:
+                                        covers_list.append(cover_data)
+                                        processed_cover_ids.add(cover_data["cover_id"])
+                                        logger.info(f"从 {json_file.name} 加载了新封面: {cover_data['cover_id']}")
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.warning(f"无法处理封面JSON文件 {json_file}: {e}")
+            
+            logger.info(f"共加载了 {len(covers_list)} 个封面记录")
 
             # 清理无效的封面记录
             cleaned_covers = self._clean_invalid_covers(covers_list, project_path)

@@ -13,7 +13,8 @@ from services.file_system import ProjectFileSystem
 from services.comic_service import ComicService
 from models.comic import (
     ComicGenerateRequest, ChapterComic, ChapterInfo, ChapterDetail,
-    PanelConfirmRequest, BatchConfirmRequest, ChapterExportRequest, ChapterExportResponse
+    PanelConfirmRequest, BatchConfirmRequest, ChapterExportRequest, ChapterExportResponse,
+    CoverInfo, ProjectCoversResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ async def get_project_chapters(
     """
     try:
         chapters = fs.get_chapters_info(project_id)
+        logger.info(f"返回 {len(chapters)} 个章节的信息")
         return chapters
     except Exception as e:
         logger.error(f"获取章节列表失败: {e}")
@@ -397,6 +399,9 @@ async def generate_comic_cover(
 
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
     except Exception as e:
         logger.error(f"生成封面失败: {e}")
         raise HTTPException(status_code=500, detail=f"生成封面失败: {str(e)}")
@@ -424,12 +429,85 @@ async def get_project_covers(
         cover_service = CoverService()
 
         covers = cover_service.get_project_covers(project_id, fs)
+        logger.info(f"从服务层获取到 {len(covers)} 个封面")
 
-        return {
-            "success": True,
-            "covers": covers
-        }
+        # 分离项目封面和章节封面
+        primary_cover = None
+        chapter_covers = []
 
+        for cover in covers:
+            # 数据字段映射和兼容性处理
+            image_path = cover.get("local_path", "")
+            thumbnail_url = cover.get("image_url", "")
+
+            # 处理 image_url 的不同数据结构
+            if isinstance(thumbnail_url, dict) and "image_url" in thumbnail_url:
+                thumbnail_url = thumbnail_url["image_url"]
+
+            # 如果没有 local_path但有 image_url，使用 image_url 作为缩略图
+            if not image_path and thumbnail_url:
+                image_path = thumbnail_url
+            elif not image_path:
+                # 如果都没有，使用默认值
+                image_path = ""
+                thumbnail_url = ""
+
+            # 生成缩略图URL（如果本地文件存在）
+            if image_path and not thumbnail_url:
+                # 将本地路径转换为可通过静态文件服务访问的URL
+                if image_path.startswith("/"):
+                    # 绝对路径，转换为相对路径
+                    relative_path = image_path.replace("/home/vivy/novel-comic-maker/projects/", "")
+                    thumbnail_url = f"/{relative_path}"
+                elif image_path.startswith("projects/"):
+                    # 相对路径，直接使用
+                    thumbnail_url = f"/{image_path}"
+
+            # 获取文件大小（如果本地文件存在）
+            file_size = cover.get("file_size", 0)
+            if file_size == 0 and image_path and image_path.startswith("/"):
+                try:
+                    import os
+                    if os.path.exists(image_path):
+                        file_size = os.path.getsize(image_path)
+                except Exception:
+                    file_size = 0
+
+            cover_info = CoverInfo(
+                cover_id=cover["cover_id"],
+                cover_type=cover["cover_type"],
+                title=cover.get("title"),
+                description=cover.get("description"),
+                image_path=image_path,
+                thumbnail_url=thumbnail_url,
+                is_primary=cover.get("is_primary", False),
+                created_at=cover["created_at"],
+                file_size=file_size
+            )
+
+            if cover.get("cover_type") == "project":
+                if cover.get("is_primary", False):
+                    primary_cover = cover_info
+                # 如果没有设置主封面，使用第一个项目封面
+                elif primary_cover is None:
+                    primary_cover = cover_info
+            elif cover.get("cover_type") == "chapter":
+                chapter_covers.append(cover_info)
+        
+        logger.info(f"封面数据处理完成: primary_cover={primary_cover}, chapter_covers_count={len(chapter_covers)}")
+
+        response_data = ProjectCoversResponse(
+            project_id=project_id,
+            primary_cover=primary_cover,
+            chapter_covers=chapter_covers,
+            total_covers=len(covers)
+        )
+        logger.info(f"准备返回封面数据: {response_data.dict()}")
+        return response_data
+
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
     except Exception as e:
         logger.error(f"获取封面列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取封面列表失败: {str(e)}")
@@ -466,6 +544,9 @@ async def delete_cover(
 
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
     except Exception as e:
         logger.error(f"删除封面失败: {e}")
         raise HTTPException(status_code=500, detail=f"删除封面失败: {str(e)}")
@@ -503,6 +584,9 @@ async def set_primary_cover(
 
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
     except Exception as e:
         logger.error(f"设置主要封面失败: {e}")
         raise HTTPException(status_code=500, detail=f"设置主要封面失败: {str(e)}")
@@ -542,6 +626,9 @@ async def get_cover_details(
 
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
     except Exception as e:
         logger.error(f"获取封面详情失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取封面详情失败: {str(e)}")

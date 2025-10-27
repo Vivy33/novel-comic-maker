@@ -98,7 +98,7 @@ class FeedbackWorkflow:
             classification_result = await self.ai_service.generate_text(
                 prompt=classification_prompt,
                 model_preference="seedream",
-                max_tokens=800,
+                max_tokens=8000,
                 temperature=0.2
             )
 
@@ -193,7 +193,7 @@ class FeedbackWorkflow:
             handling_result = await self.ai_service.generate_text(
                 prompt=handling_prompt,
                 model_preference="seedream",
-                max_tokens=800,
+                max_tokens=8000,
                 temperature=0.3
             )
 

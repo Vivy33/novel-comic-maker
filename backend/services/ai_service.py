@@ -390,7 +390,7 @@ class VolcengineService:
             logger.error(f"调用文生图模型 {model} 失败: {e}")
             return None
 
-    def image_to_image(self, model: str, prompt: str, image_url: str, image_base64: Optional[str] = None) -> Optional[str]:
+    def image_to_image(self, model: str, prompt: str, image_url: str, image_base64: Optional[str] = None, size: str = "1024x1024", strength: float = 0.8) -> Optional[str]:
         """
         调用图生图模型 (doubao-seedream-4-0-250828)。
 
@@ -399,21 +399,28 @@ class VolcengineService:
             prompt: 提示词
             image_url: 参考图片URL
             image_base64: 参考图片的Base64编码 (可选)
+            size: 图片尺寸 (如 "1024x1024", "768x1024" 等)
+            strength: 生成强度/温度 (0.0-1.0)，控制与参考图的相似度
         """
         if not self.is_available():
             logger.error("火山引擎服务不可用。")
             return None
         try:
             logger.info(f"向图生图模型 {model} 发送请求...")
+            logger.info(f"参数: size={size}, strength={strength}")
 
             # 构建请求参数
             request_params = {
                 "model": model,
                 "prompt": prompt,
-                "size": "1024x1024",
+                "size": size,  # 使用传入的尺寸参数
                 "response_format": "url",
                 "watermark": False
             }
+
+            # 注意：豆包的图像生成API不支持temperature参数
+            # strength参数仅用于前端控制，这里记录日志但不传递给API
+            logger.info(f"生成强度参数: {strength} (不传递给API)")
 
             # 优先使用image_base64，如果没有则使用image_url
             if image_base64:
@@ -642,10 +649,10 @@ from pathlib import Path
 
 class AIService:
     """
-    对外提供统一的异步接口，并在底层服务不可用时进行优雅降级。
+    对外提供统一的异步接口，确保100% AI服务，无降级。
     """
     TEXT_MODELS = [
-        "deepseek-v3-1-terminus",
+        "deepseek-v3-1-terminus",  # 主要模型
     ]
     IMAGE_MODELS = [
         "doubao-seedream-4-0-250828",
@@ -694,6 +701,7 @@ class AIService:
             }
         }
 
+    
     def create_text_analysis_schema(self) -> Dict[str, Any]:
         """创建文本分析JSON Schema"""
         return {
@@ -960,6 +968,7 @@ class AIService:
             use_json_schema: 是否使用JSON Schema
             schema_type: Schema类型 (text_analysis, character_analysis, script_generation)
         """
+        # 简化模型选择：使用指定的模型或默认模型
         model = model_preference if model_preference in self.TEXT_MODELS else self.TEXT_MODELS[0]
 
         # 获取上下文
@@ -994,6 +1003,7 @@ class AIService:
 
         if self.provider.is_available():
             try:
+                logger.info(f"🔄 使用模型: {model}")
                 result = self.provider.chat_completion(
                     model=model,
                     messages=messages,
@@ -1002,25 +1012,20 @@ class AIService:
                 )
 
                 if isinstance(result, str) and result.strip():
+                    logger.info(f"✅ 模型 {model} 调用成功")
                     # 将对话添加到上下文
                     if context:
                         context.add_message("user", prompt)
                         context.add_message("assistant", result.strip())
 
                     return result.strip()
+                else:
+                    raise RuntimeError(f"模型 {model} 返回空结果")
             except Exception as e:
-                logger.error(f"AI文本生成失败: {e}")
-
-        # 降级策略
-        logger.warning("AI文本服务不可用或失败，使用基础降级结果。")
-        fallback_result = f"{prompt}\n\n[enhanced length={min(len(prompt), max_tokens)}]"
-
-        # 即使降级也要添加到上下文
-        if context:
-            context.add_message("user", prompt)
-            context.add_message("assistant", fallback_result)
-
-        return fallback_result
+                logger.error(f"❌ 模型 {model} 调用失败: {e}")
+                raise RuntimeError(f"AI模型调用失败: {e}")
+        else:
+            raise RuntimeError("AI文本服务不可用")
 
     async def generate_text_with_context(
         self,
@@ -1259,7 +1264,7 @@ class AIService:
             base64_image: 参考图像的base64编码
             model_preference: 模型偏好
             size: 图像尺寸
-            strength: 变化强度 (0.0-1.0)
+            strength: 变化强度 (0.0-1.0)，对应温度参数
 
         Returns:
             生成图像的URL
@@ -1269,13 +1274,16 @@ class AIService:
             try:
                 logger.info(f"向图生图模型 {model} 发送请求...")
                 logger.info(f"使用base64图像输入，大小: {len(base64_image)} 字符")
+                logger.info(f"参数: size={size}, strength={strength}")
 
-                # 直接调用provider方法，传递base64图像
+                # 直接调用provider方法，传递所有参数
                 result_url = self.provider.image_to_image(
                     model=model,
                     prompt=prompt,
                     image_url="",  # 空URL，因为我们使用base64
-                    image_base64=base64_image  # 传递base64数据
+                    image_base64=base64_image,  # 传递base64数据
+                    size=size,  # 传递尺寸参数
+                    strength=strength  # 传递强度参数（温度）
                 )
 
                 if result_url:

@@ -116,7 +116,7 @@ class CoverGenerator:
             response = await self.ai_service.generate_text(
                 prompt=prompt,
                 temperature=0.7,
-                max_tokens=1000
+                max_tokens=8000
             )
 
             # 解析AI响应

@@ -7,17 +7,15 @@ export type { CreateProjectRequest, UpdateProjectRequest } from './projectServic
 export { default as characterService } from './characterService';
 export type { CreateCharacterRequest, UpdateCharacterRequest, GenerateCharacterRequest } from './characterService';
 export { default as comicService } from './comicService';
-export type {
-  CreateComicRequest,
-  GenerateComicRequest,
-  GeneratePagesRequest
-} from './comicService';
+export type { CreateComicRequest, GenerateComicRequest, GeneratePagesRequest } from './comicService';
 export { default as imageService } from './imageService';
 export type { ImageGenerationResult, BatchImageGenerationRequest, ImageEditRequest } from './imageService';
 export { default as imageEditService } from './imageEditService';
 export { default as workflowService } from './workflowService';
 export type { StartWorkflowRequest, WorkflowTemplate, WorkflowExecution } from './workflowService';
 export { default as novelService } from './novelService';
+export { default as coverService } from './coverService';
+export type { CoverGenerationRequest, CoverGenerationResponse, CoverListResponse } from './coverService';
 
 // 重新导出常用类型
 export type {
@@ -30,10 +28,6 @@ export type {
   TextAnalysis,
   ScriptGeneration,
   WorkflowStatus,
-  Chapter,
-  ChapterDetail,
-  ChapterImage,
-  ComicExportOptions,
 } from './api';
 
 // 导出统一的API错误处理

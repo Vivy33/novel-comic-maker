@@ -1,4 +1,4 @@
-import apiClient, { ApiResponse, TextToImageRequest, ImageToImageRequest } from './api';
+import apiClient, { TextToImageRequest, ImageToImageRequest } from './api';
 
 export interface ImageGenerationResult {
   image_url: string;
@@ -43,7 +43,6 @@ export interface ImageEditRequest {
   base64_mask?: string;
   model?: string;
   size?: string;
-  strength?: number;
 }
 
 export interface ImageEditResult {
@@ -61,32 +60,28 @@ class ImageService {
    * 文生图
    */
   async generateImage(request: TextToImageRequest): Promise<ImageGenerationResult> {
-    const response = await apiClient.post<ImageGenerationResult>(`${this.baseUrl}/text-to-image`, request);
-    return response.data;
+    return await apiClient.post<ImageGenerationResult>(`${this.baseUrl}/text-to-image`, request);
   }
 
   /**
    * 批量文生图
    */
   async generateImagesBatch(request: BatchImageGenerationRequest): Promise<BatchImageGenerationResult> {
-    const response = await apiClient.post<BatchImageGenerationResult>(`${this.baseUrl}/generate-batch`, request);
-    return response.data;
+    return await apiClient.post<BatchImageGenerationResult>(`${this.baseUrl}/generate-batch`, request);
   }
 
   /**
    * 图生图
    */
   async imageToImage(request: ImageToImageRequest): Promise<ImageGenerationResult> {
-    const response = await apiClient.post<ImageGenerationResult>(`${this.baseUrl}/image-to-image`, request);
-    return response.data;
+    return await apiClient.post<ImageGenerationResult>(`${this.baseUrl}/image-to-image`, request);
   }
 
   /**
    * 编辑图像
    */
   async editImage(request: ImageEditRequest): Promise<ImageEditResult> {
-    const response = await apiClient.post<ImageEditResult>(`${this.baseUrl}/edit`, request);
-    return response.data;
+    return await apiClient.post<ImageEditResult>(`${this.baseUrl}/edit`, request);
   }
 
   /**
@@ -97,12 +92,11 @@ class ImageService {
     imageType: 'reference' | 'character' | 'edit' | 'sketch',
     onProgress?: (progress: number) => void
   ): Promise<{ image_url: string; image_id: string }> {
-    const response = await apiClient.uploadFile<{ image_url: string; image_id: string }>(
+    return await apiClient.uploadFile<{ image_url: string; image_id: string }>(
       `${this.baseUrl}/upload/${imageType}`,
       file,
       onProgress
     );
-    return response.data;
   }
 
   /**

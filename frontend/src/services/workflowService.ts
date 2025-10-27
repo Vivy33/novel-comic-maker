@@ -83,7 +83,7 @@ export interface TextSegmentationResponse {
     // 新增漫画导向字段
     segment_type?: string;
     scene_setting?: string;
-    characters_present?: string[];
+    characters?: string;
     emotional_tone?: string;
     key_events?: string[];
     transition_clues?: string[];
@@ -191,16 +191,13 @@ class WorkflowService {
   async getWorkflowStatus(workflowId: string): Promise<WorkflowExecution> {
     try {
       // 使用漫画服务的状态查询API
-      const response = await apiClient.get<any>(`/api/comics/generate/${workflowId}/status`);
+      const comicStatus = await apiClient.get<any>(`/api/comics/generate/${workflowId}/status`);
 
       // 检查响应数据是否存在
       // 后端可能返回错误信息，需要处理
-      if (!response.data) {
+      if (!comicStatus) {
         throw new Error('工作流状态响应数据为空');
       }
-
-      // 将漫画服务响应转换为工作流执行格式
-      const comicStatus = response.data;
       return {
         workflow_id: comicStatus.task_id || workflowId,
         template_id: undefined,
@@ -288,10 +285,9 @@ class WorkflowService {
    * 重试工作流
    */
   async retryWorkflow(workflowId: string, fromStep?: string): Promise<WorkflowStatus> {
-    const response = await apiClient.post<WorkflowStatus>(`${this.baseUrl}/${workflowId}/retry`, {
+    return await apiClient.post<WorkflowStatus>(`${this.baseUrl}/${workflowId}/retry`, {
       from_step: fromStep,
     });
-    return response.data;
   }
 
   /**
@@ -299,8 +295,7 @@ class WorkflowService {
    */
   async getWorkflowTemplates(workflowType?: string): Promise<WorkflowTemplate[]> {
     const url = workflowType ? `${this.baseUrl}/templates?workflow_type=${workflowType}` : `${this.baseUrl}/templates`;
-    const response = await apiClient.get<WorkflowTemplate[]>(url);
-    return response.data;
+    return await apiClient.get<WorkflowTemplate[]>(url);
   }
 
   /**
@@ -311,12 +306,11 @@ class WorkflowService {
     projectId: string,
     customizations?: Record<string, any>
   ): Promise<WorkflowStatus> {
-    const response = await apiClient.post<WorkflowStatus>(`${this.baseUrl}/start-from-template`, {
+    return await apiClient.post<WorkflowStatus>(`${this.baseUrl}/start-from-template`, {
       template_id: templateId,
       project_id: projectId,
       customizations,
     });
-    return response.data;
   }
 
   /**
@@ -346,20 +340,18 @@ class WorkflowService {
       });
     }
 
-    const response = await apiClient.get<{
+    return await apiClient.get<{
       workflows: WorkflowExecution[];
       total: number;
       has_more: boolean;
     }>(`${this.baseUrl}/project/${projectId}?${params.toString()}`);
-    return response.data;
   }
 
   /**
    * 获取工作流步骤详情
    */
   async getWorkflowStep(workflowId: string, stepId: string): Promise<WorkflowStep> {
-    const response = await apiClient.get<WorkflowStep>(`${this.baseUrl}/${workflowId}/steps/${stepId}`);
-    return response.data;
+    return await apiClient.get<WorkflowStep>(`${this.baseUrl}/${workflowId}/steps/${stepId}`);
   }
 
   /**
@@ -392,7 +384,7 @@ class WorkflowService {
       });
     }
 
-    const response = await apiClient.get<{
+    return await apiClient.get<{
       logs: Array<{
         timestamp: string;
         level: string;
@@ -403,7 +395,6 @@ class WorkflowService {
       total: number;
       has_more: boolean;
     }>(`${this.baseUrl}/${workflowId}/logs?${params.toString()}`);
-    return response.data;
   }
 
   /**
@@ -417,11 +408,10 @@ class WorkflowService {
       include_intermediate_results?: boolean;
     }
   ): Promise<{ download_url: string; file_size: number }> {
-    const response = await apiClient.post<{ download_url: string; file_size: number }>(`${this.baseUrl}/${workflowId}/export`, {
+    return await apiClient.post<{ download_url: string; file_size: number }>(`${this.baseUrl}/${workflowId}/export`, {
       format,
       options,
     });
-    return response.data;
   }
 
   /**
@@ -442,16 +432,14 @@ class WorkflowService {
       });
     }
 
-    const response = await apiClient.get(`${this.baseUrl}/stats?${params.toString()}`);
-    return response.data;
+    return await apiClient.get(`${this.baseUrl}/stats?${params.toString()}`);
   }
 
   /**
    * 创建自定义工作流模板
    */
   async createWorkflowTemplate(template: Omit<WorkflowTemplate, 'id'>): Promise<WorkflowTemplate> {
-    const response = await apiClient.post<WorkflowTemplate>(`${this.baseUrl}/templates`, template);
-    return response.data;
+    return await apiClient.post<WorkflowTemplate>(`${this.baseUrl}/templates`, template);
   }
 
   /**
@@ -461,8 +449,7 @@ class WorkflowService {
     templateId: string,
     updates: Partial<WorkflowTemplate>
   ): Promise<WorkflowTemplate> {
-    const response = await apiClient.put<WorkflowTemplate>(`${this.baseUrl}/templates/${templateId}`, updates);
-    return response.data;
+    return await apiClient.put<WorkflowTemplate>(`${this.baseUrl}/templates/${templateId}`, updates);
   }
 
   /**
@@ -487,12 +474,11 @@ class WorkflowService {
     errors: string[];
     warnings: string[];
   }> {
-    const response = await apiClient.post<{
+    return await apiClient.post<{
       valid: boolean;
       errors: string[];
       warnings: string[];
     }>(`${this.baseUrl}/validate-config`, { config });
-    return response.data;
   }
 
   // ==================== 分段式漫画生成API ====================

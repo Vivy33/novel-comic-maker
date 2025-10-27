@@ -1,4 +1,4 @@
-import apiClient, { ApiResponse, Project } from './api';
+import apiClient, { Project } from './api';
 
 export interface CreateProjectRequest {
   name: string;
@@ -19,7 +19,7 @@ class ProjectService {
    * 获取所有项目
    */
   async getProjects(): Promise<Project[]> {
-    const response = await apiClient.get<Project[]>(this.baseUrl);
+    const response = await apiClient.get<{ data: Project[]; message: string; success: boolean }>(this.baseUrl);
     return response.data;
   }
 
@@ -27,7 +27,7 @@ class ProjectService {
    * 获取项目详情
    */
   async getProject(id: string): Promise<Project> {
-    const response = await apiClient.get<Project>(`${this.baseUrl}/${id}`);
+    const response = await apiClient.get<{ data: Project; message: string; success: boolean }>(`${this.baseUrl}/${id}`);
     return response.data;
   }
 
@@ -35,7 +35,7 @@ class ProjectService {
    * 创建新项目
    */
   async createProject(data: CreateProjectRequest): Promise<Project> {
-    const response = await apiClient.post<Project>(this.baseUrl, data);
+    const response = await apiClient.post<{ data: Project; message: string; success: boolean }>(this.baseUrl, data);
     return response.data;
   }
 
@@ -43,7 +43,7 @@ class ProjectService {
    * 更新项目
    */
   async updateProject(id: string, data: UpdateProjectRequest): Promise<Project> {
-    const response = await apiClient.put<Project>(`${this.baseUrl}/${id}`, data);
+    const response = await apiClient.put<{ data: Project; message: string; success: boolean }>(`${this.baseUrl}/${id}`, data);
     return response.data;
   }
 
@@ -58,7 +58,7 @@ class ProjectService {
    * 获取项目状态
    */
   async getProjectStatus(id: string): Promise<{ status: string; progress?: number }> {
-    const response = await apiClient.get<{ status: string; progress?: number }>(`${this.baseUrl}/${id}/status`);
+    const response = await apiClient.get<{ data: { status: string; progress?: number }; message: string; success: boolean }>(`${this.baseUrl}/${id}/status`);
     return response.data;
   }
 
@@ -71,12 +71,11 @@ class ProjectService {
     fileType: 'novel' | 'reference' | 'character',
     onProgress?: (progress: number) => void
   ): Promise<{ file_url: string; file_id: string }> {
-    const response = await apiClient.uploadFile<{ file_url: string; file_id: string }>(
+    return await apiClient.uploadFile<{ file_url: string; file_id: string }>(
       `${this.baseUrl}/${projectId}/files/${fileType}`,
       file,
       onProgress
     );
-    return response.data;
   }
 
   /**
@@ -89,13 +88,13 @@ class ProjectService {
     file_url: string;
     upload_time: string;
   }>> {
-    const response = await apiClient.get<Array<{
+    const response = await apiClient.get<{ data: Array<{
       id: string;
       file_name: string;
       file_type: string;
       file_url: string;
       upload_time: string;
-    }>>(`${this.baseUrl}/${projectId}/files`);
+    }>; message: string; success: boolean }>(`${this.baseUrl}/${projectId}/files`);
     return response.data;
   }
 
@@ -110,8 +109,7 @@ class ProjectService {
    * 获取项目时间线
    */
   async getProjectTimeline(id: string): Promise<any> {
-    const response = await apiClient.get(`${this.baseUrl}/${id}/timeline`);
-    return response.data;
+    return await apiClient.get(`${this.baseUrl}/${id}/timeline`);
   }
 }
 

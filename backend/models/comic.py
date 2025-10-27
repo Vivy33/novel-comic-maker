@@ -86,6 +86,14 @@ class ChapterInfo(BaseModel):
     # 章节顺序（用于排序）
     chapter_number: int = 1
 
+    # 新增字段：封面信息
+    cover_image_path: Optional[str] = None  # 章节封面图片路径
+    cover_thumbnail_url: Optional[str] = None  # 章节封面缩略图URL
+
+    # 统计信息
+    completion_percentage: float = 0.0  # 完成百分比
+    has_unconfirmed_panels: Optional[bool] = None  # 是否有未确认的图片（自动计算）
+
 
 class ChapterImage(BaseModel):
     """章节图像"""
@@ -94,6 +102,27 @@ class ChapterImage(BaseModel):
     confirmed: bool = False
     generated_at: str
     description: Optional[str] = None
+
+
+class CoverInfo(BaseModel):
+    """封面信息"""
+    cover_id: str
+    cover_type: str  # project, chapter
+    title: Optional[str] = None
+    description: Optional[str] = None
+    image_path: str
+    thumbnail_url: str
+    is_primary: bool = False
+    created_at: str
+    file_size: int = 0
+
+
+class ProjectCoversResponse(BaseModel):
+    """项目封面响应"""
+    project_id: str
+    primary_cover: Optional[CoverInfo] = None
+    chapter_covers: List[CoverInfo] = []
+    total_covers: int = 0
 
 
 class ChapterDetail(BaseModel):

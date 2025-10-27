@@ -503,6 +503,16 @@ class ImageGenerator:
             if selected_characters and project_path:
                 character_references = self._get_character_references(project_path, selected_characters)
 
+            # 提取分段文本中的对话内容
+            dialogue_requirements = []
+            if description:
+                extracted_dialogues = self._extract_dialogue_from_text(description)
+                if extracted_dialogues:
+                    # 构建对话要求
+                    dialogue_text = "; ".join(extracted_dialogues)
+                    dialogue_requirements.append(f"**强制要求** 画面中必须体现以下角色对话: {dialogue_text}")
+                    logger.info(f"添加对话要求到prompt: {dialogue_text}")
+
             # 获取风格参考图片信息
             reference_images = script.get("reference_images", [])
             style_reference_info = ""
@@ -670,6 +680,10 @@ class ImageGenerator:
                 if character_info:
                     optimized_parts.append(f"角色设定: {'; '.join(character_info[:3])}")  # 限制数量避免过长
 
+                # 2.1. 对话要求 (高优先级，必须在画面中体现)
+                if dialogue_requirements:
+                    optimized_parts.extend(dialogue_requirements)  # 添加对话强制要求
+
                 # 3. 场景补充信息 (中等优先级，仅当需要时)
                 if scene_supplement:
                     optimized_parts.append(f"场景环境: {'; '.join(scene_supplement[:4])}")  # 增加到4个
@@ -725,6 +739,10 @@ class ImageGenerator:
                                 optimized_parts.append(f"角色: {char_name} - {char_desc}")
                         else:
                             optimized_parts.append(f"角色: {char_name}")
+
+                # 添加对话要求 (强制要求在画面中体现)
+                if dialogue_requirements:
+                    optimized_parts.extend(dialogue_requirements)  # 添加对话强制要求
 
                 # 添加风格要求
                 if style_requirements:
@@ -911,6 +929,52 @@ class ImageGenerator:
         except Exception as e:
             logger.error(f"图像编辑过程出现异常: {e}")
             return None
+
+    def _extract_dialogue_from_text(self, text: str) -> List[str]:
+        """
+        从文本中提取角色对话内容
+
+        Args:
+            text: 输入的文本内容
+
+        Returns:
+            提取的对话列表
+        """
+        try:
+            import re
+            dialogues = []
+
+            # 匹配中文对话格式："..." 或 「...」
+            chinese_quotes_pattern = r'["""](.*?)["""]'
+            chinese_brackets_pattern = r'[「『](.*?)[」』]'
+
+            # 提取引号对话
+            quote_matches = re.findall(chinese_quotes_pattern, text)
+            dialogues.extend([f"\"{dialogue}\"" for dialogue in quote_matches])
+
+            # 提取括号对话
+            bracket_matches = re.findall(chinese_brackets_pattern, text)
+            dialogues.extend([f"「{dialogue}」" for dialogue in bracket_matches])
+
+            # 匹配英文对话格式："..." 或 '...'
+            english_quotes_pattern = r'["\']([^"\']+)["\']'
+            english_matches = re.findall(english_quotes_pattern, text)
+            dialogues.extend([f"\"{dialogue}\"" for dialogue in english_matches])
+
+            # 去重并过滤过短的对话
+            unique_dialogues = []
+            for dialogue in dialogues:
+                if len(dialogue.strip()) > 3 and dialogue not in unique_dialogues:
+                    unique_dialogues.append(dialogue)
+
+            if unique_dialogues:
+                logger.info(f"从文本中提取到 {len(unique_dialogues)} 处对话: {unique_dialogues}")
+
+            return unique_dialogues[:3]  # 最多保留3处对话，避免prompt过长
+
+        except Exception as e:
+            logger.error(f"提取对话失败: {e}")
+            return []
 
     def _extract_character_count_constraints(self, core_scene: str, structured_data: Dict[str, Any], character_info: List[str]) -> List[str]:
         """

@@ -47,7 +47,7 @@ interface CharacterCard {
     background: string;
     skills: string[];
     stats: {
-      strength: number;
+      vitality: number;
       intelligence: number;
       charisma: number;
       agility: number;
@@ -538,11 +538,11 @@ const CharacterCardViewDialog: React.FC<CharacterCardViewDialogProps> = ({
                     </Typography>
 
                     <StatBar
-                      label="力量"
-                      value={isEditing && editForm ? editForm.front_view?.stats?.strength || 0 : characterCard.front_view.stats.strength}
+                      label="体力"
+                      value={isEditing && editForm ? editForm.front_view?.stats?.vitality || 0 : characterCard.front_view.stats.vitality}
                       color="#f44336"
                       isEditing={isEditing}
-                      onChange={(value) => handleFormFieldChange('front_view.stats.strength', value)}
+                      onChange={(value) => handleFormFieldChange('front_view.stats.vitality', value)}
                     />
                     <StatBar
                       label="智力"

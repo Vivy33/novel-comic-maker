@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>漫画管理功能测试指南</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .success {
+            background-color: #e8f5e8;
+            color: #2e7d32;
+            border: 1px solid #4caf50;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .info {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #2196f3;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .step {
+            margin: 15px 0;
+            padding: 15px;
+            border-left: 4px solid #4caf50;
+            background-color: #f8f9fa;
+        }
+        .code {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            margin: 10px 0;
+        }
+        .highlight {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 漫画管理功能测试指南</h1>
+
+        <div class="success">
+            <strong>✅ 状态：功能已完成并测试通过</strong><br>
+            封面API已修复，封面管理器已创建并成功集成到漫画管理页面。
+        </div>
+
+        <div class="step">
+            <h3>📋 已完成的功能</h3>
+            <ol>
+                <li><strong>封面API数据字段映射修复</strong> - 解决了字段不匹配导致的500错误</li>
+                <li><strong>封面管理器组件创建</strong> - 创建了功能完整的封面管理界面</li>
+                <li><strong>漫画管理页面优化</strong> - 重构为标签页结构，分离章节和封面管理</li>
+                <li><strong>API服务扩展</strong> - 添加了设置主封面和删除封面的API方法</li>
+            </ol>
+        </div>
+
+        <div class="step">
+            <h3>🧪 测试步骤</h3>
+
+            <h4>1. 访问漫画管理页面</h4>
+            <div class="code">
+            http://localhost:3000/projects → 找到项目 "2025.10.26_00.40_疯狂山脉" → 点击进入 → 点击"漫画管理"标签页（第4个标签）
+            </div>
+
+            <h4>2. 测试章节管理功能</h4>
+            <ul>
+                <li>查看章节列表和统计卡片</li>
+                <li>尝试搜索和筛选功能</li>
+                <li>使用"全选"和"批量导出"按钮</li>
+            </ul>
+
+            <h4>3. 测试封面管理功能</h4>
+            <ul>
+                <li>点击"封面管理"标签页</li>
+                <li>查看封面网格显示（应显示1个项目封面和2个章节封面）</li>
+                <li>尝试搜索和过滤功能</li>
+                <li>点击封面查看大图预览</li>
+                <li>使用右键菜单测试各项功能</li>
+            </ul>
+        </div>
+
+        <div class="success">
+            <h3>🎉 功能已完成</h3>
+            <p>漫画管理功能现在已完全可用，包括章节管理和封面管理两大核心功能。用户可以有效地管理他们的漫画项目内容，包括查看章节、管理封面、批量操作等。</p>
+        </div>
+    </div>
+</body>
+</html>

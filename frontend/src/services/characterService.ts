@@ -30,42 +30,32 @@ class CharacterService {
    * 获取项目的所有角色
    */
   async getProjectCharacters(projectId: string): Promise<Character[]> {
-    const response = await apiClient.get<{characters: Character[]}>(`${this.baseUrl}/${projectId}`);
-    console.log('getProjectCharacters - 原始响应:', response);
-    console.log('getProjectCharacters - response.data:', response.data);
-    console.log('getProjectCharacters - response.data?.characters:', response.data?.characters);
-    const result = response.data?.characters || [];
-    console.log('getProjectCharacters - 最终结果:', result);
-    return result;
+    const response = await apiClient.get<Character[]>(`${this.baseUrl}/${projectId}`);
+    return response;
   }
 
   /**
    * 获取角色详情
    */
   async getCharacter(id: string): Promise<Character> {
-    const response = await apiClient.get<{data: Character}>(`${this.baseUrl}/${id}`);
-    return response.data?.data;
+    const response = await apiClient.get<Character>(`${this.baseUrl}/${id}`);
+    return response;
   }
 
   /**
    * 创建新角色
    */
   async createCharacter(data: CreateCharacterRequest): Promise<Character> {
-    console.log('createCharacter - 请求数据:', data);
-    const response = await apiClient.post<{data: Character}>(`${this.baseUrl}/${data.project_id}`, data);
-    console.log('createCharacter - 响应:', response);
-    console.log('createCharacter - response.data:', response.data);
-    const result = response.data?.data;
-    console.log('createCharacter - 最终结果:', result);
-    return result;
+    const response = await apiClient.post<Character>(`${this.baseUrl}/${data.project_id}`, data);
+    return response;
   }
 
   /**
    * 更新角色
    */
   async updateCharacter(id: string, data: UpdateCharacterRequest): Promise<Character> {
-    const response = await apiClient.put<{data: Character}>(`${this.baseUrl}/${id}`, data);
-    return response.data?.data;
+    const response = await apiClient.put<Character>(`${this.baseUrl}/${id}`, data);
+    return response;
   }
 
   /**
@@ -80,7 +70,7 @@ class CharacterService {
    */
   async generateCharacter(data: GenerateCharacterRequest): Promise<Character> {
     const response = await apiClient.post<Character>(`${this.baseUrl}/generate`, data);
-    return response.data;
+    return response;
   }
 
   /**
@@ -97,7 +87,7 @@ class CharacterService {
       file,
       onProgress
     );
-    return response.data;
+    return response;
   }
 
   /**
@@ -113,7 +103,7 @@ class CharacterService {
       issues: string[];
       suggestions: string[];
     }>(`${this.baseUrl}/${characterId}/check-consistency`, { image_url: imageUrl });
-    return response.data;
+    return response;
   }
 
   /**
@@ -133,7 +123,7 @@ class CharacterService {
       preview_url: string;
       tags: string[];
     }>>(`${this.baseUrl}/templates`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -147,7 +137,7 @@ class CharacterService {
       template_id: templateId,
       customizations,
     });
-    return response.data;
+    return response;
   }
 
   /**
@@ -158,7 +148,7 @@ class CharacterService {
     negative_prompt?: string;
   }): Promise<any> {
     const response = await apiClient.post<any>(`${this.baseUrl}/${characterId}/generate-card`, cardData);
-    return response.data;
+    return response;
   }
 
   /**
@@ -166,7 +156,7 @@ class CharacterService {
    */
   async getCharacterCard(characterId: string): Promise<any> {
     const response = await apiClient.get<any>(`${this.baseUrl}/${characterId}/card`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -174,7 +164,7 @@ class CharacterService {
    */
   async getCharacterCardByName(projectId: string, characterName: string): Promise<any> {
     const response = await apiClient.get<any>(`${this.baseUrl}/${projectId}/${characterName}/card`);
-    return response.data;
+    return response;
   }
 
   /**
@@ -198,7 +188,7 @@ class CharacterService {
       file,
       onProgress
     );
-    return response.data;
+    return response;
   }
 
   /**
@@ -206,7 +196,7 @@ class CharacterService {
    */
   async updateCharacterCard(projectId: string, characterName: string, cardData: any): Promise<any> {
     const response = await apiClient.put<any>(`${this.baseUrl}/${projectId}/${characterName}/card`, cardData);
-    return response.data;
+    return response;
   }
 }
 

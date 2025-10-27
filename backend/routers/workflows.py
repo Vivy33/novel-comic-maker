@@ -177,8 +177,8 @@ async def cancel_batch_job(job_id: str):
 @router.post("/segment-and-preview")
 async def segment_and_preview_novel(request: TextSegmentationRequest):
     """
-    文本分段并预览第一段
-    Segment text and preview first segment
+    文本分段并预览第一段 - 100% AI分段，无降级
+    Segment text and preview first segment - 100% AI segmentation, no fallback
     """
     try:
         if not request.novel_content.strip():
@@ -187,8 +187,18 @@ async def segment_and_preview_novel(request: TextSegmentationRequest):
         if not request.project_name:
             raise HTTPException(status_code=400, detail="项目名称不能为空")
 
-        # 使用现有的TextSegmenter进行分段
+        # 验证AI服务可用性
+        from services.ai_service import AIService
+        ai_service = AIService()
+        if not ai_service.provider.is_available():
+            raise HTTPException(status_code=503, detail="AI服务不可用，无法执行文本分段")
+
+        # 使用TextSegmenter进行分段
         from agents.text_segmenter import TextSegmenter
+
+        logger.info(f"🚀 开始AI文本分段 - 项目: {request.project_name}")
+        logger.info(f"📝 文本长度: {len(request.novel_content)} 字符")
+        logger.info(f"🎯 目标长度: {request.target_length}")
 
         text_segmenter = TextSegmenter()
         segments = await text_segmenter.segment_text(
@@ -199,7 +209,9 @@ async def segment_and_preview_novel(request: TextSegmentationRequest):
         )
 
         if not segments:
-            raise HTTPException(status_code=500, detail="文本分段失败")
+            raise HTTPException(status_code=500, detail="AI文本分段失败，未生成任何段落")
+
+        logger.info(f"✅ AI文本分段成功，生成 {len(segments)} 个段落")
 
         # 保存分段状态到项目文件系统
         from services.file_system import ProjectFileSystem
@@ -213,22 +225,29 @@ async def segment_and_preview_novel(request: TextSegmentationRequest):
             "current_segment_index": 0,
             "completed_segments": [],
             "segments": segments,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
+            "ai_segmentation": True  # 标记为AI分段
         }
 
         fs.save_history(str(project_path), "segmentation", segmentation_state)
+        logger.info(f"💾 分段状态已保存到项目: {request.project_name}")
 
         return {
             "success": True,
-            "message": f"文本成功分段为 {len(segments)} 个段落",
+            "message": f"AI文本成功分段为 {len(segments)} 个段落",
             "total_segments": len(segments),
             "segments": segments,
             "first_segment": segments[0] if segments else None,
-            "project_name": request.project_name
+            "project_name": request.project_name,
+            "ai_generated": True  # 标记为AI生成
         }
 
     except HTTPException:
         raise
+    except RuntimeError as e:
+        # AI服务不可用或分段失败的专门处理
+        logger.error(f"AI服务错误: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"文本分段失败: {e}")
         raise HTTPException(status_code=500, detail=f"文本分段失败: {str(e)}")

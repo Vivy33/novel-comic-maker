@@ -6,7 +6,7 @@ Workflow API Routes
 Provides API interfaces for workflow operations, mainly for starting comic generation
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 import logging
@@ -365,15 +365,49 @@ async def generate_segment_comics(request: SegmentGenerationRequest):
 
         logger.info(f"🎬 开始调用图像生成器，脚本包含前情提要图片: {'是' if previous_context else '否'}, 前情提要文本: {'是' if previous_segment_text else '否'}")
 
-        # 生成组图
-        generation_result = await image_generator.generate_images_for_script(
-            script=comic_script,
-            project_path=project_path,
-            max_images=request.generation_count,
-            segment_index=request.segment_index
-        )
+        # 特别关注段落3的生成过程
+        if request.segment_index == 2:  # 段落3
+            logger.info(f"🚨 [重要] 开始生成段落3的漫画图像")
+            logger.info(f"   - 漫画脚本键: {list(comic_script.keys())}")
+            logger.info(f"   - 场景描述长度: {len(comic_script.get('scene_description', ''))}")
+            logger.info(f"   - 角色数量: {len(comic_script.get('characters', []))}")
+            logger.info(f"   - 参考图片数量: {len(comic_script.get('reference_images', []))}")
+            logger.info(f"   - 生成数量: {request.generation_count}")
 
-        logger.info(f"✅ 图像生成完成，生成结果: {generation_result.get('total_options', 0)} 张图片")
+        # 记录生成开始时间
+        import time
+        generation_start_time = time.time()
+        logger.info(f"⏰ 图像生成开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # 生成组图
+        try:
+            generation_result = await image_generator.generate_images_for_script(
+                script=comic_script,
+                project_path=project_path,
+                max_images=request.generation_count,
+                segment_index=request.segment_index
+            )
+
+            # 记录生成结束时间
+            generation_end_time = time.time()
+            generation_duration = generation_end_time - generation_start_time
+            logger.info(f"⏱️ 图像生成总耗时: {generation_duration:.2f} 秒")
+            logger.info(f"✅ 图像生成完成，生成结果: {generation_result.get('total_options', 0)} 张图片")
+
+            if request.segment_index == 2:  # 段落3
+                logger.info(f"🚨 [重要] 段落3图像生成成功")
+                logger.info(f"   - 生成选项: {generation_result.get('total_options', 0)}")
+                logger.info(f"   - 生成结果键: {list(generation_result.keys())}")
+
+        except Exception as generation_error:
+            generation_end_time = time.time()
+            generation_duration = generation_end_time - generation_start_time
+            logger.error(f"❌ 图像生成失败，耗时: {generation_duration:.2f} 秒")
+            logger.error(f"❌ 生成错误: {generation_error}")
+            logger.error(f"❌ 错误类型: {type(generation_error)}")
+            if request.segment_index == 2:  # 段落3
+                logger.error(f"🚨 [关键错误] 段落3图像生成失败！")
+            raise generation_error
 
         # 更新分段状态 - 修复历史记录保存逻辑
         logger.info(f"📝 开始保存段落 {request.segment_index + 1} 的生成历史记录")
@@ -755,3 +789,107 @@ async def start_comic_generation_workflow(request: ComicGenerationRequest):
     except Exception as e:
         logger.error(f"启动漫画生成工作流失败: {e}")
         raise HTTPException(status_code=500, detail=f"启动漫画生成失败: {str(e)}")
+
+
+# ====================== 章节清理API ======================
+
+@router.post("/cleanup-chapters")
+async def cleanup_chapters(
+    project_name: str,
+    target_chapter: str = None,
+    dry_run: bool = True
+):
+    """
+    清理项目章节目录结构
+    Clean up project chapter directory structure
+
+    Args:
+        project_name: 项目名称
+        target_chapter: 目标章节名称（可选）
+        dry_run: 是否为试运行模式
+    """
+    try:
+        logger.info(f"🧹 开始清理章节目录结构 - 项目: {project_name}")
+        logger.info(f"🎯 目标章节: {target_chapter if target_chapter else '自动选择'}")
+        logger.info(f"🔍 试运行模式: {'是' if dry_run else '否'}")
+
+        # 解析项目路径
+        fs = ProjectFileSystem()
+        project_path = fs._resolve_project_path(project_name)
+        logger.info(f"📁 项目路径: {project_path}")
+
+        # 导入清理工具
+        from utils.chapter_cleanup import cleanup_project_chapters, analyze_project_structure
+
+        # 先分析当前结构
+        analysis = analyze_project_structure(str(project_path))
+        if "error" in analysis:
+            raise HTTPException(status_code=500, detail=f"分析章节结构失败: {analysis['error']}")
+
+        logger.info(f"📊 分析结果 - 总章节数: {analysis['total_chapters']}")
+        logger.info(f"📊 找到段落数: {len(analysis['segments'])}")
+
+        # 执行清理
+        result = cleanup_project_chapters(
+            str(project_path),
+            target_chapter=target_chapter,
+            dry_run=dry_run
+        )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=f"清理章节失败: {result.get('error')}")
+
+        logger.info(f"✅ 章节清理完成 - {'试运行' if dry_run else '正式执行'}")
+
+        return {
+            "success": True,
+            "project_name": project_name,
+            "dry_run": dry_run,
+            "analysis": analysis,
+            "result": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"清理章节API失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理章节失败: {str(e)}")
+
+
+@router.get("/analyze-chapters/{project_name}")
+async def analyze_chapters(
+    project_name: str
+):
+    """
+    分析项目章节目录结构
+    Analyze project chapter directory structure
+    """
+    try:
+        logger.info(f"🔍 开始分析章节目录结构 - 项目: {project_name}")
+
+        # 解析项目路径
+        fs = ProjectFileSystem()
+        project_path = fs._resolve_project_path(project_name)
+        logger.info(f"📁 项目路径: {project_path}")
+
+        # 导入分析工具
+        from utils.chapter_cleanup import analyze_project_structure
+
+        # 执行分析
+        analysis = analyze_project_structure(str(project_path))
+        if "error" in analysis:
+            raise HTTPException(status_code=500, detail=f"分析章节结构失败: {analysis['error']}")
+
+        logger.info(f"✅ 章节结构分析完成 - 总章节数: {analysis['total_chapters']}")
+
+        return {
+            "success": True,
+            "project_name": project_name,
+            "analysis": analysis
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"分析章节API失败: {e}")
+        raise HTTPException(status_code=500, detail=f"分析章节失败: {str(e)}")

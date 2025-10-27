@@ -30,8 +30,26 @@ class CharacterService {
    * 获取项目的所有角色
    */
   async getProjectCharacters(projectId: string): Promise<Character[]> {
-    const response = await apiClient.get<Character[]>(`${this.baseUrl}/${projectId}`);
-    return response;
+    const response = await apiClient.get<any>(`${this.baseUrl}/${projectId}`);
+
+    // 处理后端返回的数据结构
+    if (response && response.data && Array.isArray(response.data.characters)) {
+      return response.data.characters;
+    }
+
+    // 如果直接返回数组（向后兼容）
+    if (Array.isArray(response)) {
+      return response;
+    }
+
+    // 如果是对象且包含data属性且data是数组
+    if (response && Array.isArray(response.data)) {
+      return response.data;
+    }
+
+    // 其他情况返回空数组
+    console.warn('API返回的角色数据格式不正确:', response);
+    return [];
   }
 
   /**

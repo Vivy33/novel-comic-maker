@@ -61,21 +61,74 @@ class ImageGenerator:
             logger.error(f"获取下一个章节编号失败: {e}")
             return 1
 
-    def _get_chapter_dir_name(self, project_path: str, chapter_number: int = None) -> str:
+    def _get_or_create_current_chapter(self, project_path: str) -> str:
+        """
+        获取或创建当前章节目录
+
+        为项目维护统一的章节状态，确保同一项目的所有segment使用相同章节
+
+        Args:
+            project_path: 项目路径
+
+        Returns:
+            章节目录名称（如 "chapter_001"）
+        """
+        try:
+            # 章节状态文件路径
+            chapter_state_file = os.path.join(project_path, "chapters", ".current_chapter.txt")
+
+            # 确保chapters目录存在
+            chapters_dir = os.path.join(project_path, "chapters")
+            os.makedirs(chapters_dir, exist_ok=True)
+
+            # 如果存在章节状态文件，读取当前章节
+            if os.path.exists(chapter_state_file):
+                with open(chapter_state_file, 'r', encoding='utf-8') as f:
+                    current_chapter = f.read().strip()
+                    if current_chapter and os.path.exists(os.path.join(chapters_dir, current_chapter)):
+                        logger.info(f"📖 使用现有章节: {current_chapter}")
+                        return current_chapter
+
+            # 创建新章节
+            chapter_number = self._get_next_chapter_number(project_path)
+            chapter_dir = f"chapter_{chapter_number:03d}"
+
+            # 创建章节目录
+            new_chapter_path = os.path.join(chapters_dir, chapter_dir)
+            os.makedirs(new_chapter_path, exist_ok=True)
+
+            # 保存章节状态
+            with open(chapter_state_file, 'w', encoding='utf-8') as f:
+                f.write(chapter_dir)
+
+            logger.info(f"🆕 创建新章节: {chapter_dir}")
+            return chapter_dir
+
+        except Exception as e:
+            logger.error(f"获取或创建当前章节失败: {e}")
+            # 降级到原有的章节创建逻辑
+            return self._get_chapter_dir_name(project_path)
+
+    def _get_chapter_dir_name(self, project_path: str, chapter_number: int = None, force_new_chapter: bool = False) -> str:
         """
         获取章节目录名称
 
         Args:
             project_path: 项目路径
             chapter_number: 指定章节编号（可选），如果为None则自动分配
+            force_new_chapter: 是否强制创建新章节（默认False，会复用现有章节）
 
         Returns:
             章节目录名称（如 "chapter_001", "chapter_002"）
         """
-        if chapter_number is None:
-            chapter_number = self._get_next_chapter_number(project_path)
-
-        return f"chapter_{chapter_number:03d}"
+        if force_new_chapter:
+            # 强制创建新章节（用于特殊场景）
+            if chapter_number is None:
+                chapter_number = self._get_next_chapter_number(project_path)
+            return f"chapter_{chapter_number:03d}"
+        else:
+            # 默认行为：复用现有章节
+            return self._get_or_create_current_chapter(project_path)
 
     def _get_character_references(self, project_path: str, selected_characters: List[str]) -> Dict[str, Any]:
         """
@@ -161,7 +214,7 @@ class ImageGenerator:
             logger.warning("脚本中没有找到场景描述。")
             return {"error": "No scene description found."}
 
-        logger.info(f"开始为单个场景生成 {max_images} 张备选图像...")
+        logger.info(f"🎨 开始为单个场景生成 {max_images} 张备选图像...")
 
         # 优化：预处理场景描述，确保简洁精准，控制在300字符以内
         # 首先获取前情提要图片路径
@@ -308,20 +361,41 @@ class ImageGenerator:
                             ]
                             variation = variations[(i-1) % len(variations)]
                             variant_prompt = optimized_prompt + variation
-                            logger.info(f"生成第 {i+1}/{max_images} 张图像，变体: {variation}")
+                            logger.info(f"🎨 生成第 {i+1}/{max_images} 张图像，变体: {variation}")
                         else:
                             # 第一张图像使用原始prompt
                             variant_prompt = optimized_prompt
-                            logger.info(f"生成第 {i+1}/{max_images} 张图像，原始prompt")
+                            logger.info(f"🎨 生成第 {i+1}/{max_images} 张图像，原始prompt")
 
                         # 单次调用生成一张图像
-                        image_url_result = volc_service.text_to_image(
-                            model=GENERATION_MODEL,
-                            prompt=variant_prompt,
-                            max_images=1,  # 每次只生成一张图片
-                            sequential_generation="disabled",  # 禁用组图模式
-                            stream=False  # 禁用流式模式以获取URL而不是流对象
-                        )
+                        logger.info(f"🚀 开始调用火山引擎API - 第 {i+1}/{max_images} 张图像")
+                        logger.info(f"📝 Prompt长度: {len(variant_prompt)} 字符")
+                        logger.info(f"📝 Prompt内容: {variant_prompt[:100]}...")  # 显示前100个字符
+
+                        try:
+                            # 记录调用开始时间
+                            import time
+                            start_time = time.time()
+
+                            image_url_result = volc_service.text_to_image(
+                                model=GENERATION_MODEL,
+                                prompt=variant_prompt,
+                                max_images=1,  # 每次只生成一张图片
+                                sequential_generation="disabled",  # 禁用组图模式
+                                stream=False  # 禁用流式模式以获取URL而不是流对象
+                            )
+
+                            # 记录调用结束时间
+                            end_time = time.time()
+                            api_duration = end_time - start_time
+                            logger.info(f"⏱️ 火山引擎API调用耗时: {api_duration:.2f} 秒")
+                            logger.info(f"📦 API返回结果类型: {type(image_url_result)}")
+                            logger.info(f"📦 API返回结果: {image_url_result}")
+
+                        except Exception as api_error:
+                            logger.error(f"❌ 火山引擎API调用失败: {api_error}")
+                            logger.error(f"❌ API错误类型: {type(api_error)}")
+                            raise api_error
 
                         if image_url_result:
                             # 处理API返回的字典格式

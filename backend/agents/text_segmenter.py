@@ -4,6 +4,7 @@
 文本分段Agent - 漫画生成专用
 强制使用JSON Schema，无错误处理机制，确保100%成功率
 """
+import asyncio
 import json
 import logging
 from typing import List, Dict, Any, Optional
@@ -115,27 +116,102 @@ class TextSegmenter:
         target_length: str = "medium",
         language: str = "chinese"
     ) -> List[TextSegment]:
-        """使用JSON Schema进行漫画分段"""
+        """使用JSON Schema进行漫画分段 - 100% AI分段，无降级"""
         target_chars = 300
         logger.info("🔧 开始调用 _ai_comic_segmentation_with_schema 方法")
         logger.info(f"📏 目标字符数: {target_chars}")
         logger.info(f"📝 输入文本长度: {len(text)} 字符")
+
+        # 验证AI服务可用性
+        if not self.ai_service.provider.is_available():
+            raise RuntimeError("AI服务不可用，无法执行文本分段")
 
         # 构建简化prompt
         logger.info("📝 开始构建 _build_simple_schema_prompt")
         prompt = self._build_simple_schema_prompt(text, target_chars)
         logger.info(f"✅ 构建完成，prompt长度: {len(prompt)} 字符")
 
-        # 使用文本模型 + JSON Schema
-        result = await self.ai_service.generate_text(
-            prompt=prompt,
-            model_preference="deepseek-v3-1-terminus",
-            use_json_schema=True,
-            schema_type="simple_text_segmentation"
-        )
+        # 使用文本模型 + JSON Schema，添加重试机制
+        max_retries = 3
+        result = None
 
-        # 直接解析JSON结果
-        segmentation_data = json.loads(result)
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔄 尝试第 {attempt + 1} 次AI调用...")
+                result = await self.ai_service.generate_text(
+                    prompt=prompt,
+                    model_preference="deepseek-v3-1-terminus",
+                    use_json_schema=True,
+                    schema_type="simple_text_segmentation"
+                )
+
+                # 验证返回结果
+                if not result or not result.strip():
+                    logger.error(f"❌ 第 {attempt + 1} 次尝试：AI返回空结果")
+                    if attempt < max_retries - 1:
+                        logger.info(f"🔄 将在5秒后重试...")
+                        await asyncio.sleep(5)
+                        continue
+                    else:
+                        raise RuntimeError(f"AI服务连续{max_retries}次返回空结果，文本分段失败")
+
+                logger.info(f"✅ AI调用成功，返回结果长度: {len(result)} 字符")
+                logger.debug(f"🔍 AI返回内容预览: {result[:200]}...")
+                break
+
+            except Exception as e:
+                logger.error(f"❌ 第 {attempt + 1} 次AI调用失败: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 将在10秒后重试...")
+                    await asyncio.sleep(10)
+                    continue
+                else:
+                    raise RuntimeError(f"AI服务连续{max_retries}次调用失败，文本分段失败: {e}")
+
+        # 验证和解析JSON结果
+        try:
+            if not result or not result.strip():
+                raise ValueError("AI返回空结果，无法解析")
+
+            # 清理可能的前后缀标记
+            cleaned_result = result.strip()
+            if cleaned_result.startswith("```json"):
+                cleaned_result = cleaned_result[7:]
+            if cleaned_result.endswith("```"):
+                cleaned_result = cleaned_result[:-3]
+            cleaned_result = cleaned_result.strip()
+
+            logger.info(f"🔧 尝试解析JSON，清理后长度: {len(cleaned_result)} 字符")
+            logger.debug(f"🔍 清理后内容预览: {cleaned_result[:200]}...")
+
+            segmentation_data = json.loads(cleaned_result)
+            logger.info("✅ JSON解析成功")
+
+            # 验证分段数据结构
+            if not isinstance(segmentation_data, dict):
+                raise ValueError("AI返回的数据格式不正确：不是字典类型")
+
+            if "segments" not in segmentation_data:
+                raise ValueError("AI返回的数据缺少'segments'字段")
+
+            segments = segmentation_data["segments"]
+            if not isinstance(segments, list):
+                raise ValueError("AI返回的segments不是列表类型")
+
+            if len(segments) == 0:
+                raise ValueError("AI返回的segments为空")
+
+            logger.info(f"✅ AI成功生成了 {len(segments)} 个段落")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON解析失败: {e}")
+            logger.error(f"🔍 原始结果: {repr(result)}")
+            logger.error(f"🔍 清理后结果: {repr(cleaned_result)}")
+            raise RuntimeError(f"AI返回的JSON格式无效: {e}")
+
+        except ValueError as e:
+            logger.error(f"❌ 结果验证失败: {e}")
+            raise RuntimeError(f"AI返回的数据结构无效: {e}")
 
         # 转换为TextSegment对象
         segments = []
@@ -164,7 +240,7 @@ class TextSegmenter:
     def _build_simple_schema_prompt(self, text: str, target_chars: int) -> str:
         """构建简化的JSON Schema prompt"""
         return f"""你是一位资深的漫画师，特别擅长构建冲突的剧情，请将以下小说文本分割成适合漫画表现的段落，引入适当的艺术加工，不要只切分原文。
-                **原文必须切成15到30段**
+                **原文必须切成20到30段**
                 各个段落中指向人的代词，替换成人名。
                 段落之间剧情要连贯，并且突出核心剧情。
 
@@ -241,3 +317,5 @@ class TextSegmenter:
             }
             for segment in segments
         ]
+
+    

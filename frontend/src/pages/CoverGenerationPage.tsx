@@ -93,6 +93,9 @@ const CoverGenerationPage: React.FC = () => {
   const [coverSize, setCoverSize] = useState('1024x1024');
   const [referenceImage, setReferenceImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const [fileDialogOpen, setFileDialogOpen] = useState(false);
   const [notification, setNotification] = useState<{
     open: boolean;
     message: string;
@@ -102,6 +105,135 @@ const CoverGenerationPage: React.FC = () => {
     message: '',
     severity: 'success',
   });
+
+  
+  // 页面初始化
+  React.useEffect(() => {
+    // 添加全局错误捕获
+    const handleError = (event: ErrorEvent) => {
+      console.error('页面发生错误:', event.error);
+      showNotification('页面发生错误，请刷新重试', 'error');
+    };
+
+    window.addEventListener('error', handleError);
+
+    return () => {
+      window.removeEventListener('error', handleError);
+    };
+  }, [projectId]);
+
+  // 清除图片选择
+  const clearImageSelection = () => {
+    setImagePreview(null);
+    setReferenceImage(null);
+    setImageLoading(false);
+    setImageError(false);
+    setFileDialogOpen(false);
+    showNotification('已清除参考图片', 'success');
+  };
+
+  
+  // 统一的文件选择处理函数
+  const handleFileSelectClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // 防止重复点击
+    if (imageLoading || fileDialogOpen) {
+      return;
+    }
+
+    // 设置对话框状态
+    setFileDialogOpen(true);
+
+    // 创建临时input元素
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (event) => {
+      handleImageSelect(event as any);
+    };
+
+    // 监听对话框关闭（用户取消选择）
+    const handleCancel = () => {
+      setTimeout(() => {
+        if (fileDialogOpen && !imageLoading) {
+          setFileDialogOpen(false);
+        }
+      }, 100);
+    };
+
+    // 添加取消监听
+    input.addEventListener('cancel', handleCancel);
+    document.addEventListener('focus', handleCancel, true);
+
+    input.click();
+
+    // 清理监听器
+    setTimeout(() => {
+      input.removeEventListener('cancel', handleCancel);
+      document.removeEventListener('focus', handleCancel, true);
+    }, 1000);
+  };
+
+  // 拖拽上传处理函数
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const files = e.dataTransfer.files;
+
+    if (files && files.length > 0) {
+      const file = files[0];
+
+      // 创建一个模拟的input事件对象
+      const mockInput = document.createElement('input');
+      mockInput.type = 'file';
+      mockInput.files = files;
+
+      const mockEvent = {
+        target: mockInput,
+        currentTarget: mockInput,
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        nativeEvent: new Event('change')
+      } as any;
+
+      handleImageSelect(mockEvent);
+    }
+  };
+
+  // 处理图片加载状态
+  const handleImageLoadStart = () => {
+    setImageLoading(true);
+    setImageError(false);
+  };
+
+  const handleImageLoad = () => {
+    setImageLoading(false);
+    setImageError(false);
+  };
+
+  const handleImageError = () => {
+    setImageLoading(false);
+    setImageError(true);
+    showNotification('图片预览失败', 'error');
+  };
 
   // 获取项目封面列表
   const { data: coversData, isLoading: coversLoading } = useQuery({
@@ -163,6 +295,8 @@ const CoverGenerationPage: React.FC = () => {
     setCoverType(newValue === 0 ? 'project' : 'chapter');
     setSelectedNovel('');
     setNovelContent('');
+    // 重置封面描述，让用户重新填写
+    setCoverPrompt('');
   };
 
   // 处理小说选择
@@ -173,62 +307,98 @@ const CoverGenerationPage: React.FC = () => {
 
   // 处理参考图片选择
   const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    console.log('🔍 前端调试：handleImageSelect 被调用');
-    console.log('🔍 前端调试：选择的文件:', file);
-    console.log('🔍 前端调试：文件类型:', file?.type);
-    console.log('🔍 前端调试：文件大小:', file?.size);
-
-    if (file) {
-      if (file.type.startsWith('image/')) {
-        console.log('✅ 前端调试：文件类型验证通过，开始处理');
-        setReferenceImage(file);
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          console.log('✅ 前端调试：FileReader 读取完成，结果长度:', (reader.result as string).length);
-          console.log('✅ 前端调试：设置图片预览');
-          setImagePreview(reader.result as string);
-          showNotification(`图片已选择: ${file.name}`, 'success');
-        };
-        reader.onerror = (error) => {
-          console.error('❌ 前端调试：FileReader 读取失败:', error);
-          showNotification('图片读取失败', 'error');
-        };
-        reader.readAsDataURL(file);
-        console.log('🔄 前端调试：开始读取文件为DataURL');
-      } else {
-        console.log('❌ 前端调试：文件类型验证失败:', file.type);
-        showNotification('请选择有效的图片文件', 'error');
+    try {
+      // 防止重复处理
+      if (imageLoading || fileDialogOpen) {
+        return;
       }
-    } else {
-      console.log('❌ 前端调试：没有选择文件');
+
+      const file = event.target.files?.[0];
+
+      if (!file) {
+        setFileDialogOpen(false);
+        return;
+      }
+
+      // 基本类型验证
+      if (!file.type.startsWith('image/')) {
+        showNotification(`请选择图片文件，当前类型: ${file.type}`, 'error');
+        setFileDialogOpen(false);
+        return;
+      }
+
+      setFileDialogOpen(false); // 关闭对话框状态
+      setImageLoading(true);   // 设置加载状态
+      showNotification('正在处理图片...', 'success');
+
+      // 设置文件引用
+      setReferenceImage(file);
+
+      // FileReader 处理
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        const result = e.target?.result as string;
+
+        if (result && typeof result === 'string') {
+          setImagePreview(result);
+          setImageLoading(false);
+          showNotification(`图片已加载: ${file.name}`, 'success');
+        } else {
+          setImageLoading(false);
+          showNotification('图片处理失败', 'error');
+        }
+      };
+
+      reader.onerror = (error) => {
+        console.error('图片读取失败:', error);
+        setImageLoading(false);
+        setFileDialogOpen(false);
+        showNotification('图片读取失败', 'error');
+      };
+
+      reader.readAsDataURL(file);
+
+    } catch (error) {
+      console.error('图片处理出现错误:', error);
+      setImageLoading(false);
+      setFileDialogOpen(false);
+      showNotification('图片处理出现错误', 'error');
     }
   };
 
   // 处理生成
   const handleGenerate = () => {
-    console.log('🚀 前端调试：handleGenerate 被调用');
-    console.log('🚀 前端调试：coverType:', coverType);
-    console.log('🚀 前端调试：selectedNovel:', selectedNovel);
-    console.log('🚀 前端调试：coverPrompt:', coverPrompt);
-    console.log('🚀 前端调试：coverSize:', coverSize);
-    console.log('🚀 前端调试：referenceImage:', referenceImage);
-    console.log('🚀 前端调试：referenceImage.name:', referenceImage?.name);
-    console.log('🚀 前端调试：referenceImage.size:', referenceImage?.size);
+    // 增强验证：检查图片状态
+    if (referenceImage && imageError) {
+      showNotification('参考图片加载失败，请重新选择图片', 'error');
+      return;
+    }
+
+    if (referenceImage && imageLoading) {
+      showNotification('图片还在加载中，请稍候', 'warning');
+      return;
+    }
 
     if (coverType === 'chapter' && !selectedNovel) {
-      console.log('❌ 前端调试：章节封面需要选择小说文件');
       showNotification('请选择小说文件', 'error');
       return;
     }
 
     if (!coverPrompt.trim()) {
-      console.log('❌ 前端调试：封面描述为空');
       showNotification('请输入封面描述', 'error');
       return;
     }
 
-    console.log('✅ 前端调试：开始调用 generateMutation');
+    // 检查图片文件大小限制（10MB）
+    if (referenceImage && referenceImage.size > 10 * 1024 * 1024) {
+      showNotification('图片文件过大，请选择小于10MB的图片', 'error');
+      return;
+    }
+
+    // 显示生成开始的通知
+    showNotification('开始生成封面...', 'success');
+
     generateMutation.mutate({
       coverType,
       novelFilename: coverType === 'chapter' ? selectedNovel : undefined,
@@ -330,6 +500,7 @@ const CoverGenerationPage: React.FC = () => {
               <TabPanel value={tabValue} index={1}>
                 <Alert severity="info" sx={{ mb: 3 }}>
                   章节封面基于选定小说的内容生成，适合为单个章节创建专属封面。
+                  <strong>请先选择小说文件，然后填写封面描述。</strong>
                 </Alert>
 
                 {/* 小说选择 */}
@@ -339,18 +510,40 @@ const CoverGenerationPage: React.FC = () => {
                   onNovelSelect={handleNovelSelect}
                 />
 
+                {!selectedNovel && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    ⚠️ 请先在上方选择小说文件，然后才能填写封面描述
+                  </Alert>
+                )}
+
                 <TextField
                   fullWidth
                   multiline
                   rows={4}
                   label="封面描述"
-                  placeholder="描述您想要的封面风格和内容..."
+                  placeholder="描述您想要的封面风格和内容，如'科幻风格，主角站在城市之巅'..."
                   value={coverPrompt}
                   onChange={(e) => setCoverPrompt(e.target.value)}
-                  sx={{ mb: 3, mt: 3 }}
+                  sx={{
+                    mb: 3,
+                    mt: 3,
+                    '& .MuiInputBase-input.Mui-disabled': {
+                      WebkitTextFillColor: 'text.secondary',
+                      color: 'text.secondary',
+                    },
+                    '& .Mui-disabled .MuiInputBase-input': {
+                      cursor: 'not-allowed',
+                    },
+                  }}
                   disabled={!selectedNovel}
+                  helperText={
+                    !selectedNovel
+                      ? `请先在上方选择小说文件 (当前状态: ${selectedNovel ? '已选择' : '未选择'})`
+                      : `已选择: ${selectedNovel.substring(selectedNovel.lastIndexOf('/') + 1) || selectedNovel}`
+                  }
                 />
-              </TabPanel>
+
+                              </TabPanel>
 
               {/* 通用配置 */}
               <Box sx={{ p: 3, pt: 0 }}>
@@ -375,56 +568,156 @@ const CoverGenerationPage: React.FC = () => {
                   <Typography variant="subtitle2" gutterBottom>
                     参考图片（可选）
                   </Typography>
-                  <Button
-                    variant="outlined"
-                    component="label"
-                    startIcon={<UploadIcon />}
-                    fullWidth
-                    sx={{ py: 2 }}
+
+                  {/* 拖拽上传区域 */}
+                  <Box
+                    sx={{
+                      position: 'relative',
+                      border: '2px dashed',
+                      borderColor: referenceImage ? 'success.main' : 'grey.300',
+                      borderRadius: 2,
+                      p: 3,
+                      textAlign: 'center',
+                      backgroundColor: referenceImage ? 'success.50' : 'grey.50',
+                      cursor: imageLoading ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s ease',
+                      '&:hover': {
+                        backgroundColor: imageLoading ? 'inherit' : 'primary.50',
+                        borderColor: imageLoading ? 'inherit' : 'primary.main'
+                      }
+                    }}
+                    onDragOver={handleDragOver}
+                    onDragEnter={handleDragEnter}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={handleFileSelectClick}
                   >
-                    选择参考图片
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageSelect}
-                      style={{ display: 'none' }}
-                    />
-                  </Button>
-                  {referenceImage && (
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                      已选择: {referenceImage.name}
+                    <UploadIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+                    <Typography variant="body1" gutterBottom>
+                      {imageLoading ? '正在处理图片...' :
+                       (referenceImage ? '重新选择图片' : '点击选择或拖拽图片到此处')}
                     </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      支持 JPG、PNG、GIF 等图片格式
+                    </Typography>
+                  </Box>
+
+  
+                  {referenceImage && (
+                    <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip
+                        label={referenceImage.name}
+                        size="small"
+                        color={imageError ? "error" : "success"}
+                        variant="outlined"
+                        onDelete={clearImageSelection}
+                        deleteIcon={<DeleteIcon fontSize="small" />}
+                      />
+                      <Typography variant="caption" color="text.secondary">
+                        ({(referenceImage.size / 1024).toFixed(1)} KB)
+                      </Typography>
+                      {imageLoading && (
+                        <CircularProgress size={16} sx={{ ml: 1 }} />
+                      )}
+                    </Box>
                   )}
                 </Box>
 
                 {/* 参考图片预览 */}
-                {imagePreview && (
+                {(imagePreview || imageLoading) && (
                   <Box sx={{ mb: 3 }}>
-                    <Typography variant="subtitle2" gutterBottom>
-                      参考图片预览
-                    </Typography>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                      <Typography variant="subtitle2">
+                        参考图片预览
+                      </Typography>
+                      <IconButton
+                        size="small"
+                        onClick={clearImageSelection}
+                        sx={{ color: 'text.secondary' }}
+                        disabled={imageLoading}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
                     <Box
                       sx={{
-                        border: '1px solid',
-                        borderColor: 'grey.300',
-                        borderRadius: 1,
+                        border: '2px solid',
+                        borderColor: imageError ? 'error.main' : 'grey.300',
+                        borderRadius: 2,
                         overflow: 'hidden',
                         height: 200,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         backgroundColor: 'grey.50',
+                        position: 'relative',
                       }}
                     >
-                      <img
-                        src={imagePreview}
-                        alt="参考图片"
-                        style={{
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          objectFit: 'contain',
-                        }}
-                      />
+                      {imageLoading ? (
+                        <Box sx={{ textAlign: 'center' }}>
+                          <CircularProgress size={40} sx={{ mb: 1 }} />
+                          <Typography variant="body2" color="text.secondary">
+                            加载图片中...
+                          </Typography>
+                        </Box>
+                      ) : imageError ? (
+                        <Box sx={{ textAlign: 'center', p: 2 }}>
+                          <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+                            图片加载失败
+                          </Typography>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={() => {
+                              setImageError(false);
+                              if (imagePreview) {
+                                setImagePreview(imagePreview); // 重新触发加载
+                              }
+                            }}
+                          >
+                            重试
+                          </Button>
+                        </Box>
+                      ) : imagePreview ? (
+                        <>
+                          <img
+                            src={imagePreview}
+                            alt="参考图片"
+                            style={{
+                              maxWidth: '100%',
+                              maxHeight: '100%',
+                              objectFit: 'contain',
+                            }}
+                            onLoadStart={handleImageLoadStart}
+                            onLoad={handleImageLoad}
+                            onError={handleImageError}
+                          />
+                          {referenceImage && (
+                            <Box
+                              sx={{
+                                position: 'absolute',
+                                bottom: 0,
+                                left: 0,
+                                right: 0,
+                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                color: 'white',
+                                p: 1,
+                                textAlign: 'center',
+                              }}
+                            >
+                              <Typography variant="caption">
+                                {referenceImage.name} ({(referenceImage.size / 1024).toFixed(1)} KB)
+                              </Typography>
+                            </Box>
+                          )}
+                        </>
+                      ) : (
+                        <Box sx={{ textAlign: 'center' }}>
+                          <Typography variant="body2" color="text.secondary">
+                            无图片预览
+                          </Typography>
+                        </Box>
+                      )}
                     </Box>
                   </Box>
                 )}
@@ -438,11 +731,16 @@ const CoverGenerationPage: React.FC = () => {
                   disabled={
                     generateMutation.isPending ||
                     (coverType === 'chapter' && !selectedNovel) ||
-                    !coverPrompt.trim()
+                    !coverPrompt.trim() ||
+                    imageLoading ||
+                    imageError
                   }
                   sx={{ py: 1.5 }}
                 >
-                  {generateMutation.isPending ? '生成中...' : '生成封面'}
+                  {generateMutation.isPending ? '生成中...' :
+                   imageLoading ? '图片加载中...' :
+                   imageError ? '图片加载失败' :
+                   '生成封面'}
                 </Button>
 
                 {/* 生成进度 */}

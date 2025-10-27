@@ -6,6 +6,9 @@ Novel to Comic Maker - Main Startup File
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import logging
 import sys
@@ -13,6 +16,9 @@ import asyncio
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+
+# 添加Request导入
+from fastapi import Request
 
 # 加载环境变量
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -66,6 +72,46 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+# 全局异常处理器
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """处理FastAPI的请求验证错误"""
+    logger.error(f"FastAPI请求验证错误: {exc.errors()}")
+    logger.error(f"请求URL: {request.url}")
+    logger.error(f"请求方法: {request.method}")
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "detail": "请求参数验证失败",
+            "errors": exc.errors(),
+            "error_details": [
+                {
+                    "field": error['loc'][-1] if error['loc'] else 'unknown',
+                    "message": error['msg'],
+                    "type": error['type']
+                }
+                for error in exc.errors()
+            ]
+        }
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException):
+    """处理HTTP异常"""
+    logger.error(f"HTTP异常: {exc.status_code} - {exc.detail}")
+    logger.error(f"请求URL: {request.url}")
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "detail": exc.detail,
+            "error_type": "HTTP异常"
+        }
+    )
 
 # 配置CORS中间件
 app.add_middleware(

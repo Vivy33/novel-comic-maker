@@ -767,3 +767,45 @@ async def get_cover_details(
     except Exception as e:
         logger.error(f"获取封面详情失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取封面详情失败: {str(e)}")
+
+
+@router.delete("/{project_id}/covers/{cover_id}")
+async def delete_cover(
+    project_id: str,
+    cover_id: str,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    删除封面
+    Delete cover
+    """
+    try:
+        logger.info(f"删除项目 {project_id} 的封面 {cover_id}")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 调用封面服务
+        from services.cover_service import CoverService
+        cover_service = CoverService()
+
+        success = await cover_service.delete_cover(project_id, cover_id, fs)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"封面 {cover_id} 删除成功"
+            }
+        else:
+            raise HTTPException(status_code=404, detail="封面不存在")
+
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        logger.error(f"项目不存在: {e}")
+        raise HTTPException(status_code=404, detail=f"项目不存在")
+    except Exception as e:
+        logger.error(f"删除封面失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除封面失败: {str(e)}")

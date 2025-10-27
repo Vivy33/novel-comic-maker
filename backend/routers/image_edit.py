@@ -6,8 +6,11 @@ Image Editing API Routes
 Provides image-to-image generation and editing functionality
 """
 
-from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Depends
+from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Depends, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import httpx
 import io
 from typing import Optional
@@ -244,6 +247,34 @@ async def edit_uploaded_image(
     Upload image file for editing
     """
     try:
+        # 详细记录请求参数
+        logger.info(f"=== 图像编辑请求参数 ===")
+        logger.info(f"prompt: '{prompt}' (长度: {len(prompt) if prompt else 0})")
+        logger.info(f"file: {file.filename if file else None} (size: {file.size if file and hasattr(file, 'size') else 'unknown'} bytes)")
+        logger.info(f"file.content_type: {file.content_type if file else None}")
+        logger.info(f"mask_file: {mask_file.filename if mask_file else None}")
+        logger.info(f"model_preference: {model_preference}")
+        logger.info(f"size: {size}")
+        logger.info(f"stream: {stream}")
+
+        # 基本参数验证
+        if not prompt or not prompt.strip():
+            logger.error("prompt参数为空或无效")
+            raise HTTPException(status_code=422, detail="编辑提示不能为空")
+
+        if len(prompt.strip()) < 3:
+            logger.error(f"prompt参数太短: {len(prompt.strip())}")
+            raise HTTPException(status_code=422, detail="编辑提示太短，请输入至少3个字符")
+
+        if not file:
+            logger.error("file参数为空")
+            raise HTTPException(status_code=422, detail="请选择要编辑的图片文件")
+
+        if not file.filename:
+            logger.error("文件名为空")
+            raise HTTPException(status_code=422, detail="文件名无效，请选择有效的图片文件")
+
+        logger.info(f"参数验证通过，开始处理图像编辑")
         # 验证主图像文件
         if not file.content_type or not file.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="请上传图片文件")
@@ -460,7 +491,6 @@ async def image_to_image_generation(
     file: UploadFile = File(...),
     model_preference: str = Form("doubao-seedream-4-0-250828"),
     size: str = Form("1024x1024"),
-    strength: float = Form(0.8),
     stream: bool = Form(True, description="是否启用流式输出"),
     ai_service: AIService = Depends(get_ai_service)
 ):
@@ -469,24 +499,71 @@ async def image_to_image_generation(
     Image-to-Image generation - Upload reference image to generate new image
     """
     try:
-        # 验证文件类型
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="请上传图片文件")
+        logger.info(f"图生图请求开始: prompt={prompt}, file={file.filename}, model={model_preference}, size={size}")
+
+        # 简化文件验证逻辑
+        if not file:
+            logger.error("未提供文件")
+            raise HTTPException(status_code=422, detail="请选择要上传的图片文件")
+
+        if not file.filename:
+            logger.error("文件名为空")
+            raise HTTPException(status_code=422, detail="文件名无效，请选择有效的图片文件")
+
+        # 验证prompt
+        if not prompt or not prompt.strip():
+            logger.error("prompt为空")
+            raise HTTPException(status_code=422, detail="请输入图片生成提示词")
+
+        if len(prompt.strip()) < 3:
+            logger.error(f"prompt太短: {len(prompt.strip())}")
+            raise HTTPException(status_code=422, detail="提示词太短，请输入至少3个字符的描述")
+
+        logger.info(f"验证通过: 文件={file.filename}, prompt长度={len(prompt.strip())}")
 
         # 保存临时文件
         temp_dir = str(settings.TEMP_DIR / "uploads")
         os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, file.filename)
 
-        with open(temp_path, "wb") as buffer:
+        # 生成安全的临时文件名
+        timestamp = int(datetime.now().timestamp())
+        safe_filename = f"img2img_{timestamp}_{file.filename}"
+        temp_path = os.path.join(temp_dir, safe_filename)
+
+        logger.info(f"保存临时文件: {temp_path}")
+
+        try:
             content = await file.read()
-            buffer.write(content)
 
-        # 验证图像文件
-        is_valid, error_msg = validate_image_file(temp_path)
-        if not is_valid:
-            os.remove(temp_path)
-            raise HTTPException(status_code=400, detail=error_msg)
+            # 详细的文件信息日志
+            logger.info(f"文件信息: filename={file.filename}, content_type={file.content_type}, size={len(content)} bytes")
+
+            # 验证文件大小 - 更合理的限制
+            if len(content) < 50:
+                logger.error(f"文件太小: {len(content)} 字节")
+                raise HTTPException(status_code=422, detail="图片文件太小或损坏，请选择其他图片")
+
+            if len(content) > 20 * 1024 * 1024:  # 放宽到20MB限制
+                logger.error(f"文件太大: {len(content)} 字节")
+                raise HTTPException(status_code=422, detail="图片文件太大，请选择小于20MB的图片")
+
+            with open(temp_path, "wb") as buffer:
+                buffer.write(content)
+
+        except Exception as write_error:
+            logger.error(f"保存文件失败: {write_error}")
+            raise HTTPException(status_code=500, detail="文件保存失败，请重试")
+
+        # 验证图像文件 - 更宽松的验证
+        try:
+            is_valid, error_msg = validate_image_file(temp_path)
+            logger.info(f"图像验证结果: {is_valid}, 错误信息: {error_msg}")
+            if not is_valid:
+                logger.warning(f"图像验证失败但继续处理: {error_msg}")
+                # 不再直接抛出错误，而是记录警告并继续
+        except Exception as validate_error:
+            logger.warning(f"图像验证过程出错，但继续处理: {validate_error}")
+            # 验证出错不阻断流程
 
         # 转换为base64
         base64_image = encode_file_to_base64(temp_path)
@@ -497,8 +574,7 @@ async def image_to_image_generation(
                 prompt=prompt,
                 base64_image=base64_image,
                 model_preference=model_preference,
-                size=size,
-                strength=strength
+                size=size
             )
 
             if not result_url or result_url.startswith("placeholder://"):
@@ -534,16 +610,53 @@ async def image_to_image_generation(
             "generation_params": {
                 "prompt": prompt,
                 "model_preference": model_preference,
-                "size": size,
-                "strength": strength
+                "size": size
             }
         }
 
-    except HTTPException:
-        raise
+    except HTTPException as http_exc:
+        # 如果是HTTPException，添加详细日志后重新抛出
+        logger.error(f"HTTP异常: status_code={http_exc.status_code}, detail={http_exc.detail}")
+        raise http_exc
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         logger.error(f"图生图失败: {e}")
-        raise HTTPException(status_code=500, detail=f"图生图失败: {str(e)}")
+        logger.error(f"详细错误信息: {error_details}")
+
+        # 尝试从错误信息中提取具体的422错误原因
+        error_str = str(e).lower()
+
+        if "422" in error_str or "validation" in error_str or "unprocessable entity" in error_str:
+            logger.error("422错误 - 请求参数验证失败")
+            # 提供更友好的错误信息
+            if "form" in error_str.lower() or "field" in error_str.lower():
+                raise HTTPException(status_code=422, detail="表单参数格式错误，请检查上传的文件和输入参数")
+            else:
+                raise HTTPException(status_code=422, detail=f"请求参数验证失败: {str(e)}")
+        elif "network" in error_str or "connection" in error_str:
+            logger.error("网络连接错误")
+            raise HTTPException(status_code=503, detail="网络连接失败，请检查网络后重试")
+        elif "timeout" in error_str:
+            logger.error("请求超时")
+            raise HTTPException(status_code=504, detail="请求超时，请稍后重试")
+        elif "size" in error_str or "pixel" in error_str:
+            logger.error("图片尺寸相关错误")
+            raise HTTPException(status_code=422, detail=f"图片尺寸不符合要求: {str(e)}")
+        elif "format" in error_str or "corrupt" in error_str:
+            logger.error("图片格式错误")
+            raise HTTPException(status_code=422, detail=f"图片格式错误或文件损坏: {str(e)}")
+        else:
+            logger.error("未知错误")
+            raise HTTPException(status_code=500, detail=f"图生图失败: {str(e)}")
+    finally:
+        # 确保清理临时文件
+        try:
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.remove(temp_path)
+                logger.info(f"已清理临时文件: {temp_path}")
+        except Exception as cleanup_error:
+            logger.warning(f"清理临时文件失败: {cleanup_error}")
 
 
 @router.get("/temp-files")
@@ -606,6 +719,111 @@ async def delete_temp_file(filename: str):
     except Exception as e:
         logger.error(f"删除文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
+
+
+@router.post("/debug-form-data")
+async def debug_form_data(
+    prompt: str = Form(""),
+    file: UploadFile = File(None),
+    model_preference: str = Form("doubao-seedream-4-0-250828"),
+    size: str = Form("1024x1024"),
+    strength: str = Form("0.8"),
+    stream: str = Form("true")
+):
+    """
+    调试端点 - 用于测试FormData参数解析
+    Debug endpoint - For testing FormData parameter parsing
+    """
+    try:
+        # 记录所有接收到的参数
+        logger.info("=== 调试端点接收到的参数 ===")
+        logger.info(f"prompt: '{prompt}' (类型: {type(prompt)}, 长度: {len(prompt) if prompt else 0})")
+        logger.info(f"file: {file.filename if file else None} (类型: {type(file)})")
+        logger.info(f"model_preference: '{model_preference}' (类型: {type(model_preference)})")
+        logger.info(f"size: '{size}' (类型: {type(size)})")
+        logger.info(f"strength: '{strength}' (类型: {type(strength)})")
+        logger.info(f"stream: '{stream}' (类型: {type(stream)})")
+
+        # 测试strength参数转换
+        strength_float = None
+        try:
+            strength_float = float(strength)
+            logger.info(f"strength转换成功: {strength_float}")
+        except ValueError as e:
+            logger.error(f"strength转换失败: {e}")
+            strength_float = "转换失败"
+
+        # 测试stream参数转换
+        stream_bool = None
+        try:
+            stream_bool = stream.lower() in ('true', '1', 'yes')
+            logger.info(f"stream转换成功: {stream_bool}")
+        except Exception as e:
+            logger.error(f"stream转换失败: {e}")
+            stream_bool = "转换失败"
+
+        # 返回详细的参数信息
+        return {
+            "success": True,
+            "received_params": {
+                "prompt": {
+                    "value": prompt,
+                    "type": str(type(prompt)),
+                    "length": len(prompt) if prompt else 0,
+                    "is_valid": bool(prompt and len(prompt.strip()) >= 3)
+                },
+                "file": {
+                    "filename": file.filename if file else None,
+                    "type": str(type(file)),
+                    "content_type": file.content_type if file else None,
+                    "is_valid": bool(file and file.filename)
+                },
+                "model_preference": {
+                    "value": model_preference,
+                    "type": str(type(model_preference)),
+                    "is_valid": bool(model_preference)
+                },
+                "size": {
+                    "value": size,
+                    "type": str(type(size)),
+                    "is_valid": bool(size)
+                },
+                "strength": {
+                    "value": strength,
+                    "type": str(type(strength)),
+                    "converted_float": strength_float,
+                    "is_valid": strength_float is not None and 0.0 <= float(strength) <= 1.0 if isinstance(strength_float, float) else False
+                },
+                "stream": {
+                    "value": stream,
+                    "type": str(type(stream)),
+                    "converted_bool": stream_bool,
+                    "is_valid": isinstance(stream_bool, bool)
+                }
+            },
+            "validation_summary": {
+                "all_params_valid": bool(
+                    prompt and len(prompt.strip()) >= 3 and
+                    file and file.filename and
+                    model_preference and
+                    size and
+                    strength_float is not None and 0.0 <= strength_float <= 1.0
+                )
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"调试端点错误: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"错误详情: {error_details}")
+
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": str(type(e)),
+            "traceback": error_details
+        }
 
 
 @router.get("/health")

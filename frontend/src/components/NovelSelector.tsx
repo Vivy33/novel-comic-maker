@@ -63,6 +63,7 @@ const NovelSelector: React.FC<NovelSelectorProps> = ({
   } = useQuery({
     queryKey: ['novelContent', projectId, internalSelectedNovel],
     queryFn: () => {
+      console.log('🎯 开始加载小说内容:', internalSelectedNovel);
       if (!internalSelectedNovel) return null;
       return novelService.getNovelContent(projectId, internalSelectedNovel);
     },
@@ -75,6 +76,7 @@ const NovelSelector: React.FC<NovelSelectorProps> = ({
   // 当小说内容加载完成时，通知父组件
   useEffect(() => {
     if (novelContent?.content && internalSelectedNovel) {
+      console.log('🎯 小说内容加载完成，通知父组件:', internalSelectedNovel);
       onNovelSelect(internalSelectedNovel, novelContent.content);
     }
   }, [novelContent, internalSelectedNovel, onNovelSelect]);
@@ -82,6 +84,7 @@ const NovelSelector: React.FC<NovelSelectorProps> = ({
   // 处理小说选择
   const handleNovelChange = useCallback((event: any) => {
     const filename = event.target.value;
+    console.log('🎯 用户选择小说文件:', filename);
     setInternalSelectedNovel(filename);
     setExpandedPreview(!!filename);
   }, []);

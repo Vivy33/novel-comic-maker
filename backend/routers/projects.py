@@ -650,28 +650,44 @@ async def get_novel_content(
     Get novel file content
     """
     try:
+        logger.info(f"🎯 开始获取小说内容: 项目ID={project_id}, 文件名={filename}")
+
         # 查找项目路径
         projects = fs.list_projects()
         project_path = None
+        logger.info(f"📋 查找项目，总项目数: {len(projects)}")
 
-        for project in projects:
+        for i, project in enumerate(projects):
+            logger.info(f"   项目 {i+1}: {project.get('project_id')} - {project.get('project_path')}")
             if project.get("project_id") == project_id:
                 project_path = project.get("project_path")
+                logger.info(f"✅ 找到匹配的项目: {project_path}")
                 break
 
         if not project_path:
+            logger.error(f"❌ 未找到项目ID: {project_id}")
             raise HTTPException(status_code=404, detail="项目不存在")
 
         # 构建文件路径
         source_dir = Path(project_path) / "source"
         file_path = source_dir / filename
+        logger.info(f"📁 构建文件路径: {file_path}")
+        logger.info(f"📁 源目录: {source_dir}")
+        logger.info(f"📄 文件是否存在: {file_path.exists()}")
+        logger.info(f"📄 是否为文件: {file_path.is_file() if file_path.exists() else False}")
 
         if not file_path.exists() or not file_path.is_file():
+            logger.error(f"❌ 小说文件不存在: {file_path}")
             raise HTTPException(status_code=404, detail="小说文件不存在")
 
         # 读取文件内容
+        logger.info(f"📖 开始读取文件内容...")
+        import time
+        start_time = time.time()
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
+        read_time = time.time() - start_time
+        logger.info(f"✅ 文件读取完成，耗时: {read_time:.3f}秒，内容长度: {len(content)}字符")
 
         # 检查是否为主要小说
         primary_config_path = source_dir / ".primary_novel.txt"
@@ -682,24 +698,33 @@ async def get_novel_content(
                 is_primary = (primary_filename == filename)
 
         stat = file_path.stat()
+        logger.info(f"📊 文件统计: 大小={stat.st_size}字节, 创建时间={stat.st_ctime}, 修改时间={stat.st_mtime}")
+
+        response_data = {
+            "filename": filename,
+            "title": Path(filename).stem,
+            "content": content,
+            "size": stat.st_size,
+            "created_at": stat.st_ctime,
+            "modified_at": stat.st_mtime,
+            "is_primary": is_primary
+        }
+
+        logger.info(f"🚀 准备返回小说内容响应，数据键: {list(response_data.keys())}")
+        logger.info(f"✅ 小说内容获取成功完成")
 
         return ApiResponse[dict](
-            data={
-                "filename": filename,
-                "title": Path(filename).stem,
-                "content": content,
-                "size": stat.st_size,
-                "created_at": stat.st_ctime,
-                "modified_at": stat.st_mtime,
-                "is_primary": is_primary
-            },
+            data=response_data,
             message="获取小说内容成功",
             success=True
         )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取小说内容失败: {e}")
+        logger.error(f"❌ 获取小说内容失败: {e}")
+        logger.error(f"❌ 错误类型: {type(e)}")
+        import traceback
+        logger.error(f"❌ 详细错误: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"获取小说内容失败: {str(e)}")
 
 

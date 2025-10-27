@@ -123,56 +123,6 @@ export interface WorkflowStatus {
   result?: any;
 }
 
-// 章节接口
-export interface Chapter {
-  chapter_id: string;
-  title?: string;
-  created_at: string;
-  updated_at: string;
-  script?: ChapterScript;
-  images?: ChapterImage[];
-  status: 'pending' | 'generating' | 'completed' | 'error';
-}
-
-// 章节脚本接口
-export interface ChapterScript {
-  panels: Array<{
-    panel_id: number;
-    description: string;
-    characters: string[];
-    scene: string;
-    emotion: string;
-    dialogue?: string;
-    action?: string;
-  }>;
-}
-
-// 章节图像接口
-export interface ChapterImage {
-  image_path: string;
-  panel_id: number;
-  confirmed: boolean;
-  generated_at: string;
-  description?: string;
-}
-
-// 章节详情接口（扩展的Chapter）
-export interface ChapterDetail extends Chapter {
-  text_content?: string;
-  total_panels: number;
-  confirmed_panels: number;
-  unconfirmed_panels: number;
-}
-
-// 漫画导出选项
-export interface ComicExportOptions {
-  format: 'pdf' | 'images' | 'zip';
-  include_confirmed_only?: boolean;
-  chapters?: string[];
-  resolution?: string;
-  quality?: string;
-}
-
 // 文生图请求接口
 export interface TextToImageRequest {
   prompt: string;
@@ -188,19 +138,24 @@ export interface ImageToImageRequest {
   image_url: string;
   model?: string;
   size?: string;
-  strength?: number;
 }
 
 class ApiClient {
   private client: AxiosInstance;
+  private retryConfig = {
+    retries: 3,
+    retryDelay: 1000,
+    retryCondition: (error: any) => {
+      // 只重试网络错误和5xx错误
+      return !error.response || (error.response.status >= 500 && error.response.status < 600);
+    }
+  };
 
   constructor() {
     this.client = axios.create({
-      baseURL: process.env.REACT_APP_API_URL,
+      baseURL: '', // 使用相对路径，通过React代理转发到后端
       timeout: 60000, // 60秒超时
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      // 不设置默认Content-Type，让axios根据请求类型自动设置
     });
 
     // 请求拦截器
@@ -238,7 +193,7 @@ class ApiClient {
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     url: string,
     data?: any
-  ): Promise<ApiResponse<T>> {
+  ): Promise<T> {
     try {
       const response = await this.client.request({
         method,
@@ -252,35 +207,33 @@ class ApiClient {
   }
 
   // GET请求
-  async get<T>(url: string): Promise<ApiResponse<T>> {
+  async get<T>(url: string): Promise<T> {
     return this.request<T>('GET', url);
   }
 
   // POST请求
-  async post<T>(url: string, data?: any): Promise<ApiResponse<T>> {
+  async post<T>(url: string, data?: any): Promise<T> {
     return this.request<T>('POST', url, data);
   }
 
   // PUT请求
-  async put<T>(url: string, data?: any): Promise<ApiResponse<T>> {
+  async put<T>(url: string, data?: any): Promise<T> {
     return this.request<T>('PUT', url, data);
   }
 
   // DELETE请求
-  async delete<T>(url: string): Promise<ApiResponse<T>> {
+  async delete<T>(url: string): Promise<T> {
     return this.request<T>('DELETE', url);
   }
 
   // 文件上传
-  async uploadFile<T>(url: string, file: File, onProgress?: (progress: number) => void): Promise<ApiResponse<T>> {
+  async uploadFile<T>(url: string, file: File, onProgress?: (progress: number) => void): Promise<T> {
     const formData = new FormData();
     formData.append('file', file);
 
     try {
       const response = await this.client.post(url, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+        // 不要手动设置Content-Type，让浏览器自动设置multipart/form-data边界
         onUploadProgress: (progressEvent) => {
           if (onProgress && progressEvent.total) {
             const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);

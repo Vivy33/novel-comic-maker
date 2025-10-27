@@ -6,10 +6,23 @@ Novel to Comic Maker - Configuration
 import os
 from pathlib import Path
 from typing import Optional
+import logging
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
 BACKEND_ROOT = Path(__file__).parent
+
+# 权威.env文件路径
+AUTH_ENV_PATH = PROJECT_ROOT / ".env"
+ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
+BACKUP_ENV_PATHS = [
+    BACKEND_ROOT / ".env",
+    PROJECT_ROOT / ".env.local",
+    PROJECT_ROOT / ".env.production"
+]
 
 # 基础配置
 class Settings:
@@ -111,6 +124,7 @@ class Settings:
 
     def __init__(self):
         """初始化配置，创建必要的目录"""
+        self._check_env_files()
         self._create_directories()
 
     def _create_directories(self):
@@ -123,6 +137,79 @@ class Settings:
 
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
+
+    def _check_env_files(self):
+        """检查.env文件配置，确保使用权威配置文件"""
+        # 检查权威.env文件是否存在
+        if not AUTH_ENV_PATH.exists():
+            logger.warning(f"权威.env文件不存在: {AUTH_ENV_PATH}")
+
+            # 尝试从.env.example复制模板
+            if ENV_EXAMPLE_PATH.exists():
+                logger.info(f"发现.env.example模板文件: {ENV_EXAMPLE_PATH}")
+                logger.info("建议复制模板文件创建.env配置:")
+                logger.info(f"  cp {ENV_EXAMPLE_PATH} {AUTH_ENV_PATH}")
+                logger.info("然后编辑.env文件，填入实际的API密钥配置")
+            else:
+                logger.warning("未找到.env.example模板文件")
+                logger.warning("请在项目根目录下创建.env文件并配置相关API密钥:")
+                logger.warning("  # 火山方舟 API配置")
+                logger.warning('  ARK_API_KEY="your_api_key_here"')
+                logger.warning('  VOLCENGINE_ACCESS_KEY="your_access_key_here"')
+                logger.warning('  VOLCENGINE_SECRET_KEY="your_secret_key_here"')
+
+        # 检查是否存在可能冲突的.env文件
+        conflicting_env_files = []
+        for backup_path in BACKUP_ENV_PATHS:
+            if backup_path.exists():
+                conflicting_env_files.append(backup_path)
+
+        if conflicting_env_files:
+            logger.warning("检测到可能冲突的环境变量配置文件:")
+            for env_file in conflicting_env_files:
+                logger.warning(f"  - {env_file}")
+            logger.warning(f"系统将优先使用权威配置文件: {AUTH_ENV_PATH}")
+            logger.warning("建议删除其他位置的.env文件以避免配置混淆")
+
+        # 记录实际使用的.env文件路径
+        if AUTH_ENV_PATH.exists():
+            logger.info(f"使用权威环境配置文件: {AUTH_ENV_PATH}")
+        else:
+            logger.info("未找到.env文件，将使用系统环境变量或默认值")
+
+    def ensure_env_file(self) -> bool:
+        """确保.env文件存在，首次部署时自动创建"""
+        if AUTH_ENV_PATH.exists():
+            return True
+
+        # 尝试从.env.example创建
+        if ENV_EXAMPLE_PATH.exists():
+            try:
+                import shutil
+                shutil.copy2(ENV_EXAMPLE_PATH, AUTH_ENV_PATH)
+                logger.info(f"已从模板创建.env文件: {AUTH_ENV_PATH}")
+                logger.info("请编辑.env文件，填入实际的API密钥配置")
+                return True
+            except Exception as e:
+                logger.error(f"复制.env.example文件失败: {e}")
+                return False
+        else:
+            # 创建基础的.env文件
+            try:
+                with open(AUTH_ENV_PATH, 'w', encoding='utf-8') as f:
+                    f.write("# AI模型API密钥配置\n")
+                    f.write("# 请填入您的实际API密钥\n\n")
+                    f.write("# 火山方舟 API配置\n")
+                    f.write('ARK_API_KEY="your_api_key_here"\n')
+                    f.write('VOLCENGINE_ACCESS_KEY="your_access_key_here"\n')
+                    f.write('VOLCENGINE_SECRET_KEY="your_secret_key_here"\n')
+
+                logger.info(f"已创建基础.env文件: {AUTH_ENV_PATH}")
+                logger.info("请编辑.env文件，填入实际的API密钥配置")
+                return True
+            except Exception as e:
+                logger.error(f"创建.env文件失败: {e}")
+                return False
 
     @property
     def is_development(self) -> bool:

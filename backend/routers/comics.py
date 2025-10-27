@@ -14,7 +14,7 @@ from services.comic_service import ComicService
 from models.comic import (
     ComicGenerateRequest, ChapterComic, ChapterInfo, ChapterDetail,
     PanelConfirmRequest, BatchConfirmRequest, ChapterExportRequest, ChapterExportResponse,
-    CoverInfo, ProjectCoversResponse
+    CoverInfo, ProjectCoversResponse, ChapterCreateRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -155,15 +155,150 @@ async def get_project_chapters(
 ):
     """
     获取项目章节列表
-    Get project chapter list
+    Get project list
     """
     try:
-        chapters = fs.get_chapters_info(project_id)
-        logger.info(f"返回 {len(chapters)} 个章节的信息")
-        return chapters
+        # 获取原始章节信息
+        raw_chapters = fs.get_chapters_info(project_id)
+
+        # 识别需要合并的章节 (chapter_001 到 chapter_005 合并为第1章)
+        merged_chapters = []
+        chapter_groups = {}
+
+        for chapter in raw_chapters:
+            # 检查是否是需要合并的章节 (chapter_001-005)
+            if chapter.chapter_id.startswith("chapter_00") and chapter.chapter_id <= "chapter_005":
+                # 这是第1章的部分，添加到第1章组
+                if "main_chapter" not in chapter_groups:
+                    chapter_groups["main_chapter"] = {
+                        "chapter_id": "chapter_001",
+                        "title": "第1章",
+                        "created_at": chapter.created_at,
+                        "updated_at": chapter.updated_at,
+                        "status": "completed",  # 如果任一部分是completed，整体标记为completed
+                        "total_panels": 0,
+                        "confirmed_panels": 0,
+                        "unconfirmed_panels": 0,
+                        "chapter_number": 1,
+                        "cover_image_path": chapter.cover_image_path,
+                        "cover_thumbnail_url": chapter.cover_thumbnail_url,
+                        "completion_percentage": 0.0,
+                        "has_unconfirmed_panels": None,
+                        "source_chapters": []  # 记录原始章节ID
+                    }
+
+                # 合并统计信息
+                group = chapter_groups["main_chapter"]
+                group["total_panels"] += chapter.total_panels
+                group["confirmed_panels"] += chapter.confirmed_panels
+                group["unconfirmed_panels"] += chapter.unconfirmed_panels
+                group["source_chapters"].append(chapter.chapter_id)
+
+                # 更新状态和更新时间
+                if chapter.status == "completed":
+                    group["status"] = "completed"
+                if chapter.updated_at > group["updated_at"]:
+                    group["updated_at"] = chapter.updated_at
+                if chapter.created_at < group["created_at"]:
+                    group["created_at"] = chapter.created_at
+
+                # 使用最早创建章节的标题（如果有的话）
+                if chapter.title and not group["title"]:
+                    group["title"] = chapter.title
+            else:
+                # 其他章节正常添加
+                merged_chapters.append(chapter)
+
+        # 添加合并后的主章节
+        if "main_chapter" in chapter_groups:
+            # 将字典转换为ChapterInfo对象
+            from models.comic import ChapterInfo
+            main_chapter_dict = chapter_groups["main_chapter"]
+            main_chapter = ChapterInfo(**main_chapter_dict)
+            merged_chapters.append(main_chapter)
+            # 按章节编号排序
+            merged_chapters.sort(key=lambda x: x.chapter_number)
+        else:
+            # 如果没有需要合并的章节，按原样排序
+            merged_chapters = raw_chapters
+            merged_chapters.sort(key=lambda x: x.chapter_number)
+
+        logger.info(f"返回 {len(merged_chapters)} 个章节的信息（合并后）")
+        return merged_chapters
     except Exception as e:
         logger.error(f"获取章节列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取章节列表失败: {str(e)}")
+
+
+@router.post("/{project_id}/chapters", response_model=Dict[str, Any])
+async def create_chapter(
+    project_id: str,
+    request: ChapterCreateRequest,
+    fs: ProjectFileSystem = Depends(get_file_system)
+):
+    """
+    创建新章节
+    Create new chapter
+    """
+    try:
+        logger.info(f"为项目 {project_id} 创建新章节，标题: {request.title}")
+
+        # 验证项目存在
+        project_path = fs.get_project_path(project_id)
+        if not project_path:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+        # 使用智能章节编号系统
+        from agents.image_generator import ImageGenerator
+        image_gen = ImageGenerator()
+
+        if request.chapter_number is None:
+            # 自动分配下一个章节编号
+            chapter_number = image_gen._get_next_chapter_number(str(project_path))
+        else:
+            chapter_number = request.chapter_number
+
+        chapter_dir = image_gen._get_chapter_dir_name(str(project_path), chapter_number)
+
+        # 创建章节目录结构
+        chapters_path = project_path / "chapters"
+        chapter_path = chapters_path / chapter_dir
+        chapter_path.mkdir(parents=True, exist_ok=True)
+
+        # 创建子目录
+        (chapter_path / "images").mkdir(exist_ok=True)
+        (chapter_path / "metadata").mkdir(exist_ok=True)
+
+        # 创建章节信息文件
+        chapter_info = {
+            "chapter_id": chapter_dir,
+            "title": f"第{chapter_number}章 - {request.title}" if request.title != "新章节" else f"第{chapter_number}章",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "status": "pending",
+            "total_panels": 0,
+            "confirmed_panels": 0,
+            "unconfirmed_panels": 0,
+            "chapter_number": chapter_number
+        }
+
+        import json
+        with open(chapter_path / "chapter_info.json", "w", encoding="utf-8") as f:
+            json.dump(chapter_info, f, ensure_ascii=False, indent=2)
+
+        logger.info(f"成功创建章节: {chapter_dir} - {chapter_info['title']}")
+
+        return {
+            "success": True,
+            "chapter": chapter_info,
+            "message": f"章节 {chapter_info['title']} 创建成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建章节失败: {e}")
+        raise HTTPException(status_code=500, detail=f"创建章节失败: {str(e)}")
 
 
 @router.get("/{project_id}/chapters/{chapter_id}", response_model=ChapterDetail)

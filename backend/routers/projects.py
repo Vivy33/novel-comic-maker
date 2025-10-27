@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from services.file_system import ProjectFileSystem
+from services.cover_service import CoverService
 from models.file_system import ProjectCreate, ProjectUpdate, ProjectInfo, Project, ProjectTimeline, ApiResponse, NovelCreate, NovelUpdate
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,10 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 # 依赖注入：获取文件系统实例
 def get_file_system():
     return ProjectFileSystem()
+
+# 依赖注入：获取封面服务实例
+def get_cover_service():
+    return CoverService()
 
 
 @router.post("/", response_model=ApiResponse[Project])
@@ -63,7 +68,10 @@ async def create_project(
 
 
 @router.get("/", response_model=ApiResponse[List[Project]])
-async def list_projects(fs: ProjectFileSystem = Depends(get_file_system)):
+async def list_projects(
+    fs: ProjectFileSystem = Depends(get_file_system),
+    cover_service: CoverService = Depends(get_cover_service)
+):
     """
     获取所有项目列表
     Get list of all projects
@@ -72,20 +80,85 @@ async def list_projects(fs: ProjectFileSystem = Depends(get_file_system)):
     try:
         projects = fs.list_projects()
         # 转换为前端期望的格式
-        project_list = [Project(
-            id=project["project_id"],
-            name=project["project_name"],
-            description=project.get("description") or f"项目 {project['project_name']}",
-            created_at=project["created_at"],
-            updated_at=project.get("updated_at") or project["created_at"],  # 如果没有更新时间，使用创建时间
-            status=project["status"],
-            metadata={
-                "display_id": project["project_id"].split("_", 2)[-1],  # 只显示项目名称部分
-                "current_step": project.get("current_step", "initialized"),
-                "total_characters": project.get("total_characters", 0),
-                "project_path": project.get("project_path")
-            }
-        ) for project in projects]
+        project_list = []
+
+        for project in projects:
+            # 获取项目封面信息
+            primary_cover = None
+            try:
+                covers = cover_service.get_project_covers(project["project_id"], fs)
+
+                # 分离项目封面和章节封面（与comics.py中的逻辑相同）
+                primary_cover_info = None
+                chapter_covers = []
+
+                for cover in covers:
+                    # 数据字段映射和兼容性处理
+                    image_path = cover.get("local_path", "")
+                    thumbnail_url = cover.get("image_url", "")
+
+                    # 处理 image_url 的不同数据结构
+                    if isinstance(thumbnail_url, dict) and "image_url" in thumbnail_url:
+                        thumbnail_url = thumbnail_url["image_url"]
+
+                    # 如果没有 local_path但有 image_url，使用 image_url 作为缩略图
+                    if not image_path and thumbnail_url:
+                        image_path = thumbnail_url
+                    elif not image_path:
+                        # 如果都没有，使用默认值
+                        image_path = ""
+                        thumbnail_url = ""
+
+                    # 生成缩略图URL（如果本地文件存在）
+                    if image_path and not thumbnail_url:
+                        # 将本地路径转换为可通过静态文件服务访问的URL
+                        if image_path.startswith("/"):
+                            # 绝对路径，转换为相对路径
+                            relative_path = image_path.replace("/home/vivy/novel-comic-maker/projects/", "")
+                            thumbnail_url = f"/{relative_path}"
+                        elif image_path.startswith("projects/"):
+                            # 相对路径，直接使用
+                            thumbnail_url = f"/{image_path}"
+
+                    if cover.get("cover_type") == "project":
+                        if cover.get("is_primary", False):
+                            primary_cover_info = {
+                                "cover_id": cover["cover_id"],
+                                "thumbnail_url": thumbnail_url,
+                                "title": cover.get("title")
+                            }
+                        # 如果没有设置主封面，使用第一个项目封面
+                        elif primary_cover_info is None:
+                            primary_cover_info = {
+                                "cover_id": cover["cover_id"],
+                                "thumbnail_url": thumbnail_url,
+                                "title": cover.get("title")
+                            }
+
+                primary_cover = primary_cover_info
+
+                if primary_cover:
+                    logger.info(f"项目 {project['project_id']} 主封面: {primary_cover.get('title', '无标题')}")
+
+            except Exception as cover_error:
+                logger.warning(f"获取项目 {project['project_id']} 封面信息失败: {cover_error}")
+
+            project_data = Project(
+                id=project["project_id"],
+                name=project["project_name"],
+                description=project.get("description") or f"项目 {project['project_name']}",
+                created_at=project["created_at"],
+                updated_at=project.get("updated_at") or project["created_at"],  # 如果没有更新时间，使用创建时间
+                status=project["status"],
+                metadata={
+                    "display_id": project["project_id"].split("_", 2)[-1],  # 只显示项目名称部分
+                    "current_step": project.get("current_step", "initialized"),
+                    "total_characters": project.get("total_characters", 0),
+                    "project_path": project.get("project_path")
+                },
+                primary_cover=primary_cover
+            )
+            project_list.append(project_data)
 
         return ApiResponse[List[Project]](
             data=project_list,
@@ -100,7 +173,8 @@ async def list_projects(fs: ProjectFileSystem = Depends(get_file_system)):
 @router.get("/{project_id}", response_model=ApiResponse[Project])
 async def get_project(
     project_id: str,
-    fs: ProjectFileSystem = Depends(get_file_system)
+    fs: ProjectFileSystem = Depends(get_file_system),
+    cover_service: CoverService = Depends(get_cover_service)
 ):
     """
     获取项目详细信息
@@ -123,6 +197,62 @@ async def get_project(
         project_info = fs.get_project_info(project_path)
         project_info["project_path"] = project_path
 
+        # 获取项目封面信息
+        primary_cover = None
+        try:
+            covers = cover_service.get_project_covers(project_id, fs)
+
+            # 分离项目封面和章节封面（与comics.py中的逻辑相同）
+            primary_cover_info = None
+
+            for cover in covers:
+                # 数据字段映射和兼容性处理
+                image_path = cover.get("local_path", "")
+                thumbnail_url = cover.get("image_url", "")
+
+                # 处理 image_url 的不同数据结构
+                if isinstance(thumbnail_url, dict) and "image_url" in thumbnail_url:
+                    thumbnail_url = thumbnail_url["image_url"]
+
+                # 如果没有 local_path但有 image_url，使用 image_url 作为缩略图
+                if not image_path and thumbnail_url:
+                    image_path = thumbnail_url
+                elif not image_path:
+                    # 如果都没有，使用默认值
+                    image_path = ""
+                    thumbnail_url = ""
+
+                # 生成缩略图URL（如果本地文件存在）
+                if image_path and not thumbnail_url:
+                    # 将本地路径转换为可通过静态文件服务访问的URL
+                    if image_path.startswith("/"):
+                        # 绝对路径，转换为相对路径
+                        relative_path = image_path.replace("/home/vivy/novel-comic-maker/projects/", "")
+                        thumbnail_url = f"/{relative_path}"
+                    elif image_path.startswith("projects/"):
+                        # 相对路径，直接使用
+                        thumbnail_url = f"/{image_path}"
+
+                if cover.get("cover_type") == "project":
+                    if cover.get("is_primary", False):
+                        primary_cover_info = {
+                            "cover_id": cover["cover_id"],
+                            "thumbnail_url": thumbnail_url,
+                            "title": cover.get("title")
+                        }
+                    # 如果没有设置主封面，使用第一个项目封面
+                    elif primary_cover_info is None:
+                        primary_cover_info = {
+                            "cover_id": cover["cover_id"],
+                            "thumbnail_url": thumbnail_url,
+                            "title": cover.get("title")
+                        }
+
+            primary_cover = primary_cover_info
+
+        except Exception as cover_error:
+            logger.warning(f"获取项目 {project_id} 封面信息失败: {cover_error}")
+
         project_data = Project(
             id=project_info["project_id"],
             name=project_info["project_name"],
@@ -135,7 +265,8 @@ async def get_project(
                 "current_step": project_info.get("current_step", "initialized"),
                 "total_characters": project_info.get("total_characters", 0),
                 "project_path": project_path
-            }
+            },
+            primary_cover=primary_cover
         )
 
         return ApiResponse[Project](

@@ -20,8 +20,9 @@ from dotenv import load_dotenv
 # 添加Request导入
 from fastapi import Request
 
-# 加载环境变量
-load_dotenv(Path(__file__).parent.parent / ".env")
+# 加载环境变量 - 确保使用根目录的.env文件
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
 
 # 配置日志
 logging.basicConfig(
@@ -36,6 +37,21 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("启动小说生成漫画应用后端服务...")
     logger.info("Phase 2 功能已完成，基础服务运行中")
+
+    # 检查.env文件配置
+    from config import settings
+    logger.info("检查环境变量配置...")
+
+    # 如果.env文件不存在，尝试创建
+    if not (Path(__file__).parent.parent / ".env").exists():
+        logger.info("首次部署检测到，尝试创建.env配置文件...")
+        if settings.ensure_env_file():
+            logger.info(".env文件已创建，请编辑后重启服务以应用配置")
+        else:
+            logger.warning("无法自动创建.env文件，请手动创建")
+    else:
+        # 配置检查已在settings初始化时执行
+        logger.info("环境变量配置检查完成")
 
     # 启动临时文件清理任务
     cleanup_task = None

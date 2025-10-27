@@ -5,6 +5,7 @@ Image Generator Agent
 负责根据漫画脚本中的描述生成和编辑图像。
 """
 import logging
+import os
 from typing import Dict, Any, List
 
 from services.ai_service import volc_service
@@ -23,6 +24,58 @@ class ImageGenerator:
 
     def __init__(self):
         pass
+
+    def _get_next_chapter_number(self, project_path: str) -> int:
+        """
+        获取下一个章节编号
+
+        Args:
+            project_path: 项目路径
+
+        Returns:
+            下一个章节编号（整数）
+        """
+        try:
+            chapters_dir = os.path.join(project_path, "chapters")
+            if not os.path.exists(chapters_dir):
+                return 1
+
+            # 扫描现有章节目录
+            existing_chapters = []
+            for item in os.listdir(chapters_dir):
+                if item.startswith("chapter_") and os.path.isdir(os.path.join(chapters_dir, item)):
+                    try:
+                        # 提取章节编号
+                        chapter_num = int(item.split("_")[1])
+                        existing_chapters.append(chapter_num)
+                    except (ValueError, IndexError):
+                        continue
+
+            if not existing_chapters:
+                return 1
+
+            # 返回下一个章节编号
+            return max(existing_chapters) + 1
+
+        except Exception as e:
+            logger.error(f"获取下一个章节编号失败: {e}")
+            return 1
+
+    def _get_chapter_dir_name(self, project_path: str, chapter_number: int = None) -> str:
+        """
+        获取章节目录名称
+
+        Args:
+            project_path: 项目路径
+            chapter_number: 指定章节编号（可选），如果为None则自动分配
+
+        Returns:
+            章节目录名称（如 "chapter_001", "chapter_002"）
+        """
+        if chapter_number is None:
+            chapter_number = self._get_next_chapter_number(project_path)
+
+        return f"chapter_{chapter_number:03d}"
 
     def _get_character_references(self, project_path: str, selected_characters: List[str]) -> Dict[str, Any]:
         """
@@ -306,10 +359,10 @@ class ImageGenerator:
                         import time
 
                         filename = f"scene_option_{i+1}_{int(time.time())}.png"
-                        # 根据段落索引动态生成章节目录 (chapter_001, chapter_002, etc.)
-                        chapter_number = segment_index + 1
-                        chapter_dir = f"chapter_{chapter_number:03d}"
-                        output_dir = f"{project_path}/chapters/{chapter_dir}/images"
+                        # 使用统一章节目录和分镜子目录
+                        chapter_dir = self._get_chapter_dir_name(project_path)
+                        segment_dir = f"segment_{segment_index + 1:02d}"
+                        output_dir = f"{project_path}/chapters/{chapter_dir}/images/{segment_dir}"
                         output_path = f"{output_dir}/{filename}"
 
                         # 下载图像到本地
@@ -395,10 +448,10 @@ class ImageGenerator:
                             import time
 
                             filename = f"scene_option_{i+1}_{int(time.time())}.png"
-                            # 根据段落索引动态生成章节目录 (chapter_001, chapter_002, etc.)
-                            chapter_number = segment_index + 1
-                            chapter_dir = f"chapter_{chapter_number:03d}"
-                            output_dir = f"{project_path}/chapters/{chapter_dir}/images"
+                            # 使用统一章节目录和分镜子目录
+                            chapter_dir = self._get_chapter_dir_name(project_path)
+                            segment_dir = f"segment_{segment_index + 1:02d}"
+                            output_dir = f"{project_path}/chapters/{chapter_dir}/images/{segment_dir}"
                             output_path = f"{output_dir}/{filename}"
 
                             # 下载图像到本地
@@ -912,7 +965,9 @@ class ImageGenerator:
                     import time
 
                     filename = f"edited_{int(time.time())}.png"
-                    output_dir = f"{project_path}/chapters/chapter_001/images"
+                    # 使用智能章节编号系统，默认保存到最新章节
+                    chapter_dir = self._get_chapter_dir_name(project_path)
+                    output_dir = f"{project_path}/chapters/{chapter_dir}/images"
                     output_path = f"{output_dir}/{filename}"
 
                     local_path = await download_image_from_url(edited_url, output_path)

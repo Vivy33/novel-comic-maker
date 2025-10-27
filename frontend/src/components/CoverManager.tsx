@@ -59,6 +59,8 @@ const CoverManager: React.FC<CoverManagerProps> = ({ projectId, coversData, onRe
     message: '',
     severity: 'success',
   });
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // 加载封面数据
   const loadCovers = useCallback(async () => {
@@ -180,22 +182,46 @@ const CoverManager: React.FC<CoverManagerProps> = ({ projectId, coversData, onRe
     }
   };
 
-  // 删除封面
-  const handleDelete = async () => {
+  // 删除封面 - 显示确认对话框
+  const handleDelete = () => {
+    if (!selectedCoverForMenu) return;
+    setDeleteConfirmOpen(true);
+  };
+
+  // 确认删除封面
+  const confirmDelete = async () => {
     if (!selectedCoverForMenu) return;
 
     try {
+      setIsDeleting(true);
       console.log('🗑️ 删除封面:', selectedCoverForMenu.cover_id);
       await comicService.deleteCover(projectId, selectedCoverForMenu.cover_id);
       showNotification('封面删除成功', 'success');
-      loadCovers(); // 重新加载数据
+
+      // 关闭确认对话框和菜单
+      setDeleteConfirmOpen(false);
+      handleMenuClose();
+
+      // 重新加载数据
+      await loadCovers();
+
+      // 如果有回调函数，调用它
+      if (onRefresh) {
+        onRefresh();
+      }
     } catch (err) {
       console.error('❌ 删除封面失败:', err);
       const apiError = handleApiError(err);
       showNotification(apiError.message, 'error');
     } finally {
-      handleMenuClose();
+      setIsDeleting(false);
     }
+  };
+
+  // 取消删除
+  const cancelDelete = () => {
+    setDeleteConfirmOpen(false);
+    handleMenuClose();
   };
 
   // 下载封面
@@ -543,6 +569,58 @@ const CoverManager: React.FC<CoverManagerProps> = ({ projectId, coversData, onRe
             startIcon={<DownloadIcon />}
           >
             下载封面
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 删除确认对话框 */}
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={cancelDelete}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>确认删除封面</DialogTitle>
+        <DialogContent>
+          <Typography>
+            确定要删除这个封面吗？
+          </Typography>
+          {selectedCoverForMenu && (
+            <Box sx={{ mt: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+              <Typography variant="body2" color="text.secondary">
+                <strong>封面ID:</strong> {selectedCoverForMenu.cover_id.slice(-8)}
+              </Typography>
+              {selectedCoverForMenu.title && (
+                <Typography variant="body2" color="text.secondary">
+                  <strong>标题:</strong> {selectedCoverForMenu.title}
+                </Typography>
+              )}
+              <Typography variant="body2" color="text.secondary">
+                <strong>类型:</strong> {selectedCoverForMenu.cover_type === 'project' ? '项目封面' : '章节封面'}
+              </Typography>
+              {selectedCoverForMenu.is_primary && (
+                <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                  <strong>⚠️ 这是主封面，删除后需要重新设置主封面</strong>
+                </Typography>
+              )}
+            </Box>
+          )}
+          <Typography variant="body2" color="error" sx={{ mt: 2 }}>
+            此操作无法撤销。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={cancelDelete} disabled={isDeleting}>
+            取消
+          </Button>
+          <Button
+            onClick={confirmDelete}
+            color="error"
+            variant="contained"
+            disabled={isDeleting}
+            startIcon={isDeleting ? <CircularProgress size={16} /> : <DeleteIcon />}
+          >
+            {isDeleting ? '删除中...' : '确认删除'}
           </Button>
         </DialogActions>
       </Dialog>

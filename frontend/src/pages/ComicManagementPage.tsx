@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
   Card,
-  CardContent,
-  CardMedia,
   Button,
   Grid,
   Chip,
@@ -34,7 +32,6 @@ import {
   Refresh as RefreshIcon,
   Download as DownloadIcon,
   CameraAlt as CameraIcon,
-  Add as AddIcon,
   MoreVert as MoreVertIcon,
   Delete as DeleteIcon,
   Image as ImageIcon,
@@ -42,9 +39,10 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { comicService } from '../services/comicService';
-import { ChapterInfo, CoverInfo } from '../models/comic';
+import * as ComicModels from '../models/comic';
 import LoadingState from '../components/LoadingState';
 import CoverManager from '../components/CoverManager';
+import PanelGridDisplay from '../components/PanelGridDisplay';
 import {
   Tabs,
   Tab,
@@ -61,10 +59,10 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
 
   // 状态管理
   const [currentTab, setCurrentTab] = useState(0);
-  const [chapters, setChapters] = useState<ChapterInfo[]>([]);
+  const [chapters, setChapters] = useState<ComicModels.ChapterInfo[]>([]);
   const [covers, setCovers] = useState<{
-    primary_cover: CoverInfo | null;
-    chapter_covers: CoverInfo[];
+    primary_cover: ComicModels.CoverInfo | null;
+    chapter_covers: ComicModels.CoverInfo[];
   }>({ primary_cover: null, chapter_covers: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,9 +76,12 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
 
   // 菜单和对话框状态
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [selectedChapter, setSelectedChapter] = useState<ChapterInfo | null>(null);
-  const [chapterImages, setChapterImages] = useState<any[]>([]);
-  const [loadingImages, setLoadingImages] = useState(false);
+  const [selectedChapter, setSelectedChapter] = useState<ComicModels.ChapterInfo | null>(null);
+  const [chapterDetail, setChapterDetail] = useState<ComicModels.ChapterDetail | null>(null);
+  const [loadingChapterDetail, setLoadingChapterDetail] = useState(false);
+
+  // 使用ref存储最近点击的章节，避免React状态更新的时序问题
+  const lastClickedChapterRef = useRef<ComicModels.ChapterInfo | null>(null);
 
   // 消息提示
   const [snackbar, setSnackbar] = useState<{
@@ -108,7 +109,7 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
       console.log('✅ 章节数据加载成功:', chaptersData);
 
       // 数据格式化处理 - 添加安全检查
-      let formattedChapters: ChapterInfo[] = [];
+      let formattedChapters: ComicModels.ChapterInfo[] = [];
       if (Array.isArray(chaptersData)) {
         formattedChapters = chaptersData.map(chapter => ({
           ...chapter,
@@ -153,19 +154,88 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
   }, [projectId]);
 
   // 加载章节详情和图片
-  const loadChapterDetail = async (chapter: ChapterInfo) => {
-    if (!projectId) return;
+  const loadChapterDetail = async (chapter: ComicModels.ChapterInfo) => {
+    console.log('🔄 loadChapterDetail 开始:', {
+      projectId: projectId,
+      chapterId: chapter.chapter_id,
+      chapterTitle: chapter.title
+    });
+
+    if (!projectId) {
+      console.error('❌ projectId 为空，无法加载章节详情');
+      return;
+    }
+
     try {
-      setLoadingImages(true);
+      setLoadingChapterDetail(true);
+      console.log('⏳ 开始调用 comicService.getChapterDetail...');
       const detail = await comicService.getChapterDetail(projectId, chapter.chapter_id);
-      setChapterImages(detail.panels || []);
+      console.log('✅ 章节详情加载成功:', {
+        panelsCount: detail?.panels?.length,
+        paragraphsCount: detail?.paragraphs?.length,
+        chapterTitle: detail?.title
+      });
+      setChapterDetail(detail);
       setSelectedChapter(chapter);
     } catch (err) {
-      console.error('加载章节详情失败:', err);
+      console.error('❌ 加载章节详情失败:', err);
       showSnackbar('加载章节详情失败', 'error');
     } finally {
-      setLoadingImages(false);
+      setLoadingChapterDetail(false);
+      console.log('🏁 loadChapterDetail 完成');
     }
+  };
+
+  // 分镜图操作处理函数
+  const handlePanelUpdateNotes = async (panelId: number, notes: string) => {
+    // TODO: 实现更新分镜图备注的API调用
+    console.log('更新分镜图备注:', panelId, notes);
+    showSnackbar('分镜图备注更新功能开发中...', 'info');
+  };
+
+  const handlePanelDelete = async (panelIds: number[]) => {
+    console.log('🗑️ handlePanelDelete 被调用:', {
+      panelIds,
+      projectId,
+      selectedChapter,
+      selectedChapterId: selectedChapter?.chapter_id
+    });
+
+    if (!projectId || !selectedChapter) {
+      console.error('❌ 缺少必要参数:', { projectId, selectedChapter });
+      showSnackbar('缺少项目或章节信息', 'error');
+      return;
+    }
+
+    console.log('🔄 开始删除分镜图:', panelIds);
+
+    try {
+      // 逐个删除分镜图
+      for (const panelId of panelIds) {
+        console.log('🗑️ 正在删除分镜图:', {
+          projectId,
+          chapterId: selectedChapter.chapter_id,
+          panelId
+        });
+        await comicService.deletePanel(projectId, selectedChapter.chapter_id, panelId);
+        console.log('✅ 分镜图删除成功:', panelId);
+      }
+
+      showSnackbar(`成功删除 ${panelIds.length} 张分镜图`, 'success');
+
+      // 重新加载章节详情以更新显示
+      await loadChapterDetail(selectedChapter);
+
+    } catch (error) {
+      console.error('❌ 删除分镜图失败:', error);
+      showSnackbar(`删除分镜图失败: ${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    }
+  };
+
+  const handlePanelReorder = async (panelIds: number[], newOrder: number[]) => {
+    // TODO: 实现重新排序分镜图的API调用
+    console.log('重新排序分镜图:', panelIds, newOrder);
+    showSnackbar('分镜图排序功能开发中...', 'info');
   };
 
   // 生成项目封面
@@ -181,7 +251,7 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
   };
 
   // 生成章节封面
-  const generateChapterCover = async (chapter: ChapterInfo) => {
+  const generateChapterCover = async (chapter: ComicModels.ChapterInfo) => {
     if (!projectId) return;
     try {
       // 调用章节封面生成API
@@ -264,15 +334,24 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
   };
 
   // 打开章节菜单
-  const handleChapterMenuOpen = (event: React.MouseEvent<HTMLElement>, chapter: ChapterInfo) => {
+  const handleChapterMenuOpen = (event: React.MouseEvent<HTMLElement>, chapter: ComicModels.ChapterInfo) => {
+    console.log('📂 打开章节菜单:', {
+      chapterId: chapter.chapter_id,
+      chapterTitle: chapter.title,
+      chapter: chapter
+    });
     setAnchorEl(event.currentTarget);
     setSelectedChapter(chapter);
+    // 同时存储到ref中，确保菜单项点击时能获取到正确的章节
+    lastClickedChapterRef.current = chapter;
   };
 
   // 关闭章节菜单
   const handleChapterMenuClose = () => {
+    console.log('🔚 关闭章节菜单，当前selectedChapter:', selectedChapter);
     setAnchorEl(null);
-    setSelectedChapter(null);
+    // 不要立即清空selectedChapter，让菜单项有机会使用它
+    // setSelectedChapter(null);
   };
 
   // 处理标签页切换
@@ -582,7 +661,18 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
                             </Typography>
                           </Box>
                         </Box>
-                        <IconButton onClick={(e) => handleChapterMenuOpen(e, chapter)}>
+                        <IconButton
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            console.log('🔘 点击了三个点按钮:', {
+                              chapterId: chapter.chapter_id,
+                              chapterTitle: chapter.title,
+                              chapter: chapter
+                            });
+                            handleChapterMenuOpen(e, chapter);
+                          }}
+                        >
                           <MoreVertIcon />
                         </IconButton>
                       </Box>
@@ -615,10 +705,29 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
       >
         <MenuList>
           <MenuItem onClick={() => {
-            if (selectedChapter) {
-              loadChapterDetail(selectedChapter);
-            }
+            console.log('🔘 点击了"查看图片"菜单项:', {
+              selectedChapter: selectedChapter,
+              hasSelectedChapter: !!selectedChapter,
+              lastClickedChapter: lastClickedChapterRef.current
+            });
+
             handleChapterMenuClose();
+
+            // 优先使用ref中的章节，避免React状态更新的时序问题
+            const chapterToLoad = lastClickedChapterRef.current || selectedChapter;
+
+            if (chapterToLoad) {
+              console.log('✅ 使用章节加载详情:', chapterToLoad.title);
+              loadChapterDetail(chapterToLoad);
+            } else {
+              console.error('❌ 没有可用的章节数据');
+              // 备用方法：直接从章节数组中获取第一个章节
+              const firstChapter = filteredAndSortedChapters[0];
+              if (firstChapter) {
+                console.log('🔄 使用备用方法加载第一个章节:', firstChapter);
+                loadChapterDetail(firstChapter);
+              }
+            }
           }}>
             <ListItemIcon>
               <ImageIcon />
@@ -662,42 +771,70 @@ const ComicManagementPage: React.FC<ComicManagementPageProps> = ({ projectId }) 
         </MenuList>
       </Menu>
 
-      {/* 章节图片详情对话框 */}
+      {/* 章节分镜图详情对话框 */}
       <Dialog
         open={!!selectedChapter}
         onClose={() => setSelectedChapter(null)}
-        maxWidth="lg"
+        maxWidth="xl"
         fullWidth
+        PaperProps={{
+          sx: {
+            height: '90vh',
+            maxHeight: '90vh',
+          }
+        }}
       >
         <DialogTitle>
-          {selectedChapter?.title || `第${selectedChapter?.chapter_number || 1}章`} - 图片详情
+          {selectedChapter?.title || `第${selectedChapter?.chapter_number || 1}章`} - 分镜图详情
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+            {selectedChapter && (
+              <>
+                <Chip
+                  label={`${selectedChapter.total_panels} 张分镜图`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                />
+                <Chip
+                  label={`${selectedChapter.confirmed_panels} 已确认`}
+                  size="small"
+                  color="success"
+                  variant="outlined"
+                />
+                {selectedChapter.has_unconfirmed_panels && (
+                  <Chip
+                    label={`${selectedChapter.unconfirmed_panels} 待确认`}
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                  />
+                )}
+              </>
+            )}
+          </Box>
         </DialogTitle>
-        <DialogContent dividers>
-          {loadingImages ? (
+        <DialogContent dividers sx={{ p: 2 }}>
+          {loadingChapterDetail ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-              <Typography>加载图片中...</Typography>
+              <LoadingState message="正在加载章节详情..." />
             </Box>
+          ) : chapterDetail ? (
+            <PanelGridDisplay
+              panels={chapterDetail.panels}
+              paragraphs={chapterDetail.paragraphs}
+              onPanelUpdateNotes={handlePanelUpdateNotes}
+              onPanelDelete={handlePanelDelete}
+              onPanelReorder={handlePanelReorder}
+              editable={true}
+              title="章节分镜图"
+              projectId={projectId}
+            />
           ) : (
-            <Grid container spacing={2}>
-              {chapterImages.map((image: any) => (
-                <Grid item xs={12} sm={6} md={4} key={image.panel_id}>
-                  <Card>
-                    <CardMedia
-                      component="img"
-                      image={image.image_path}
-                      alt={`图片 ${image.panel_id}`}
-                      sx={{ height: 150, objectFit: 'cover' }}
-                    />
-                    <CardContent sx={{ p: 1, textAlign: 'center' }}>
-                      <Typography variant="caption">
-                        图片 {image.panel_id}
-                        {image.confirmed && <CheckCircleIcon sx={{ fontSize: 16, color: 'success.main', ml: 1 }} />}
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              ))}
-            </Grid>
+            <Box sx={{ textAlign: 'center', py: 4 }}>
+              <Typography color="text.secondary">
+                暂无分镜图数据
+              </Typography>
+            </Box>
           )}
         </DialogContent>
         <DialogActions>

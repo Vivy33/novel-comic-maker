@@ -275,6 +275,38 @@ class ComicService {
   }
 
   /**
+   * 删除分镜图
+   */
+  async deletePanel(projectId: string, chapterId: string, panelId: number): Promise<any> {
+    console.log('🚀 comicService.deletePanel 调用:', {
+      projectId,
+      chapterId,
+      panelId,
+      url: `${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/${panelId}`
+    });
+
+    try {
+      const response = await apiClient.delete(`${this.baseUrl}/${projectId}/chapters/${chapterId}/panels/${panelId}`);
+      console.log('✅ comicService.deletePanel 成功:', response);
+      return response;
+    } catch (error) {
+      console.error('❌ comicService.deletePanel 失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 批量删除分镜图
+   */
+  async batchDeletePanels(projectId: string, chapterId: string, panelIds: number[]): Promise<any> {
+    // 由于后端没有批量删除API，这里我们逐个删除
+    for (const panelId of panelIds) {
+      await this.deletePanel(projectId, chapterId, panelId);
+    }
+    return { success: true, deleted_count: panelIds.length };
+  }
+
+  /**
    * 导出章节
    */
   async exportChapter(projectId: string, chapterId: string): Promise<any> {

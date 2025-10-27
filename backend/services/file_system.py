@@ -21,7 +21,7 @@ except Exception:
 
 from models.comic import (
     ChapterInfo, ChapterDetail, ChapterImage, ComicPanel,
-    ProjectChaptersInfo, StorySegment
+    ProjectChaptersInfo, StorySegment, ParagraphInfo
 )
 
 logger = logging.getLogger(__name__)
@@ -1330,7 +1330,13 @@ class ProjectFileSystem:
         story_text = None
         title = None
         status = "created"
-        chapter_number = 1
+
+        # 首先从chapter_id解析章节编号
+        try:
+            chapter_number = int(chapter_id.split("_")[-1])
+        except (ValueError, IndexError):
+            logger.warning(f"无法从章节ID {chapter_id} 解析章节编号，使用默认值1")
+            chapter_number = 1
 
         if chapter_info_file.exists():
             try:
@@ -1338,7 +1344,9 @@ class ProjectFileSystem:
                 story_text = chapter_data.get("story_text")
                 title = chapter_data.get("title")
                 status = chapter_data.get("status", "created")
-                chapter_number = chapter_data.get("chapter_number", 1)
+                # 如果chapter_info.json中有chapter_number，优先使用；否则保持从ID解析的值
+                if "chapter_number" in chapter_data:
+                    chapter_number = chapter_data["chapter_number"]
                 created_at = chapter_data.get("created_at", created_at)
                 updated_at = chapter_data.get("updated_at", updated_at)
             except Exception as e:
@@ -1374,6 +1382,9 @@ class ProjectFileSystem:
                         generated_at=datetime.fromtimestamp(image_file.stat().st_ctime).isoformat()
                     ))
 
+        # 生成段落分组信息
+        paragraphs = self._generate_paragraph_groups(panels, story_text)
+
         # 计算统计信息
         total_panels = len(panels)
         confirmed_panels = sum(1 for p in panels if p.confirmed)
@@ -1391,8 +1402,192 @@ class ProjectFileSystem:
             status=status,
             story_text=story_text,
             panels=panels,
+            paragraphs=paragraphs,  # 新增字段：段落分组数据
             total_panels=total_panels,
             confirmed_panels=confirmed_panels,
             unconfirmed_panels=unconfirmed_panels,
             chapter_number=chapter_number
         )
+
+    def _generate_paragraph_groups(self, panels: List[ComicPanel], story_text: Optional[str] = None) -> List[ParagraphInfo]:
+        """
+        生成段落分组信息
+        Args:
+            panels: 分镜画面列表
+            story_text: 原始故事文本（可选）
+        Returns:
+            段落分组信息列表
+        """
+        if not panels:
+            return []
+
+        # 直接基于分镜图的paragraph_id进行分组
+        panel_paragraph_map = {}
+        for panel in panels:
+            paragraph_id = panel.paragraph_id
+            if paragraph_id:
+                if paragraph_id not in panel_paragraph_map:
+                    panel_paragraph_map[paragraph_id] = []
+                panel_paragraph_map[paragraph_id].append(panel)
+
+        # 为每个段落组生成段落信息对象
+        paragraph_infos = []
+        for paragraph_id, panel_list in panel_paragraph_map.items():
+            if not panel_list:
+                continue
+
+            # 提取段落序号（从segment_XX中提取）
+            paragraph_index = 1
+            try:
+                if paragraph_id.startswith("segment_"):
+                    paragraph_index = int(paragraph_id.split("_")[1])
+                elif paragraph_id.startswith("paragraph_"):
+                    paragraph_index = int(paragraph_id.split("_")[1])
+            except (ValueError, IndexError):
+                paragraph_index = 1
+
+            # 生成段落内容 - 使用分镜图的描述
+            if len(panel_list) > 0:
+                descriptions = []
+                for panel in panel_list:
+                    if panel.description:
+                        descriptions.append(panel.description)
+                    elif panel.scene_description:
+                        descriptions.append(panel.scene_description)
+
+                content = " ".join(descriptions) if descriptions else f"段落 {paragraph_index}"
+            else:
+                content = f"段落 {paragraph_index}"
+
+            confirmed_count = sum(1 for p in panel_list if p.confirmed)
+
+            # 确保每个分镜图的paragraph_index正确
+            for panel in panel_list:
+                panel.paragraph_index = paragraph_index
+
+            paragraph_info = ParagraphInfo(
+                paragraph_id=paragraph_id,
+                paragraph_index=paragraph_index,
+                content=content,
+                panels=panel_list,  # 这里应该是分镜图列表，不是空的
+                panel_count=len(panel_list),
+                confirmed_count=confirmed_count
+            )
+            paragraph_infos.append(paragraph_info)
+
+        # 按段落序号排序
+        paragraph_infos.sort(key=lambda x: x.paragraph_index)
+
+        # 处理未分配段落的分镜图
+        unassigned_panels = [p for p in panels if not p.paragraph_id]
+        if unassigned_panels:
+            paragraph_info = ParagraphInfo(
+                paragraph_id="unassigned",
+                paragraph_index=999,
+                content="未分组分镜图",
+                panels=unassigned_panels,
+                panel_count=len(unassigned_panels),
+                confirmed_count=sum(1 for p in unassigned_panels if p.confirmed)
+            )
+            paragraph_infos.append(paragraph_info)
+
+        return paragraph_infos
+
+    def _split_text_to_paragraphs(self, text: str) -> List[str]:
+        """
+        将文本分割为段落
+        Args:
+            text: 原始文本
+        Returns:
+            段落列表
+        """
+        if not text:
+            return []
+
+        # 按空行分割段落
+        paragraphs = []
+        current_paragraph = ""
+
+        for line in text.split('\n'):
+            line = line.strip()
+            if line:
+                if current_paragraph:
+                    current_paragraph += " " + line
+                else:
+                    current_paragraph = line
+            elif current_paragraph:
+                paragraphs.append(current_paragraph)
+                current_paragraph = ""
+
+        if current_paragraph:
+            paragraphs.append(current_paragraph)
+
+        return paragraphs
+
+    def _extract_paragraphs_from_panels(self, panels: List[ComicPanel]) -> List[str]:
+        """
+        从分镜画面描述中提取段落信息
+        Args:
+            panels: 分镜画面列表
+        Returns:
+            段落列表
+        """
+        # 简单实现：每6个分镜图作为一个段落
+        paragraph_texts = []
+        for i in range(0, len(panels), 6):
+            paragraph_panels = panels[i:i + 6]
+            if paragraph_panels:
+                # 合并这个段落的描述
+                descriptions = [p.description or p.scene_description for p in paragraph_panels]
+                paragraph_text = " ".join(desc for desc in descriptions if desc)
+                paragraph_texts.append(paragraph_text)
+
+        return paragraph_texts
+
+    def _find_best_paragraph_for_panel(self, panel: ComicPanel, paragraphs: List[str]) -> Optional[str]:
+        """
+        为分镜图找到最匹配的段落
+        Args:
+            panel: 分镜画面
+            paragraphs: 段落列表
+        Returns:
+            最佳匹配的段落ID
+        """
+        panel_text = f"{panel.description} {panel.scene_description}".lower()
+
+        best_match_index = -1
+        best_match_score = 0
+
+        for i, paragraph in enumerate(paragraphs):
+            paragraph_lower = paragraph.lower()
+            # 简单的文本匹配算法
+            match_score = self._calculate_text_similarity(panel_text, paragraph_lower)
+
+            if match_score > best_match_score:
+                best_match_score = match_score
+                best_match_index = i
+
+        if best_match_index >= 0 and best_match_score > 0.3:  # 匹配度阈值
+            return f"paragraph_{best_match_index + 1:03d}"
+
+        return None
+
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """
+        计算两个文本的相似度（简单的词汇重叠算法）
+        Args:
+            text1: 文本1
+            text2: 文本2
+        Returns:
+            相似度分数 (0-1)
+        """
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+
+        if not words1 or not words2:
+            return 0.0
+
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+
+        return len(intersection) / len(union) if union else 0.0

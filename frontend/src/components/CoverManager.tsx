@@ -221,6 +221,7 @@ const CoverManager: React.FC<CoverManagerProps> = ({ projectId, coversData, onRe
   // 取消删除
   const cancelDelete = () => {
     setDeleteConfirmOpen(false);
+    setIsDeleting(false); // 重置删除状态
     handleMenuClose();
   };
 

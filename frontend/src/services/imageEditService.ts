@@ -1,4 +1,4 @@
-import apiClient, { ApiResponse } from './api';
+import apiClient from './api';
 
 export interface ImageEditRequest {
   prompt: string;
@@ -40,7 +40,6 @@ export interface ImageToImageResponse {
     prompt: string;
     model_preference: string;
     size: string;
-    strength?: number;
   };
 }
 
@@ -79,7 +78,7 @@ class ImageEditService {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await apiClient.post<ImageUploadResponse>(`${this.baseUrl}/upload-base64`, formData);
+    const response = await apiClient.httpClient.post<ImageUploadResponse>(`${this.baseUrl}/upload-base64`, formData);
     return response.data;
   }
 
@@ -96,7 +95,7 @@ class ImageEditService {
     formData.append('model_preference', request.model_preference || 'qwen');
     formData.append('size', request.size || '1024x1024');
 
-    const response = await apiClient.post<ImageEditResponse>(`${this.baseUrl}/edit-with-base64`, formData);
+    const response = await apiClient.httpClient.post<ImageEditResponse>(`${this.baseUrl}/edit-with-base64`, formData);
     return response.data;
   }
 
@@ -119,7 +118,7 @@ class ImageEditService {
     formData.append('model_preference', modelPreference);
     formData.append('size', size);
 
-    const response = await apiClient.post<ImageEditResponse>(`${this.baseUrl}/edit-upload`, formData);
+    const response = await apiClient.httpClient.post<ImageEditResponse>(`${this.baseUrl}/edit-upload`, formData);
     return response.data;
   }
 
@@ -144,28 +143,50 @@ class ImageEditService {
    * 获取可用的图像编辑模型
    */
   async getAvailableModels(): Promise<ImageModelsResponse> {
-    const response = await apiClient.get<ImageModelsResponse>(`${this.baseUrl}/models`);
-    return response.data;
+    return await apiClient.get<ImageModelsResponse>(`${this.baseUrl}/models`);
   }
 
   /**
-   * 图生图功能 - 上传参考图生成新图像
+   * 图生图功能 - 上传参考图生成新图像 (已废弃，请使用editUploadedImage)
+   * @deprecated 请使用 editUploadedImage 方法
    */
   async imageToImageGeneration(
     prompt: string,
     file: File,
     modelPreference: string = 'doubao-seedream-4-0-250828',
-    size: string = '1024x1024',
-    strength: number = 0.8
+    size: string = '1024x1024'
   ): Promise<ImageToImageResponse> {
+    // 重定向到图像编辑功能
+    console.warn('imageToImageGeneration 已废弃，请使用 editUploadedImage');
+    const editResponse = await this.editUploadedImage(prompt, file, undefined, modelPreference, size);
+    return {
+      success: editResponse.success,
+      result_url: editResponse.result_url,
+      local_path: editResponse.local_path,
+      original_filename: file.name,
+      generation_params: editResponse.edit_params,
+    };
+  }
+
+  /**
+   * 调试端点 - 测试FormData参数
+   */
+  async debugFormData(
+    prompt: string,
+    file: File | null = null,
+    modelPreference: string = 'doubao-seedream-4-0-250828',
+    size: string = '1024x1024'
+  ): Promise<any> {
     const formData = new FormData();
     formData.append('prompt', prompt);
-    formData.append('file', file);
+    if (file) {
+      formData.append('file', file);
+    }
     formData.append('model_preference', modelPreference);
     formData.append('size', size);
-    formData.append('strength', strength.toString());
+    formData.append('stream', 'true');
 
-    const response = await apiClient.post<ImageToImageResponse>(`${this.baseUrl}/image-to-image`, formData);
+    const response = await apiClient.httpClient.post<any>(`${this.baseUrl}/debug-form-data`, formData);
     return response.data;
   }
 
@@ -173,26 +194,23 @@ class ImageEditService {
    * 列出临时文件
    */
   async listTempFiles(): Promise<TempFileListResponse> {
-    const response = await apiClient.get<TempFileListResponse>(`${this.baseUrl}/temp-files`);
-    return response.data;
+    return await apiClient.get<TempFileListResponse>(`${this.baseUrl}/temp-files`);
   }
 
   /**
    * 删除临时文件
    */
   async deleteTempFile(filename: string): Promise<{ success: boolean; message: string }> {
-    const response = await apiClient.delete<{ success: boolean; message: string }>(`${this.baseUrl}/temp-files/${filename}`);
-    return response.data;
+    return await apiClient.delete<{ success: boolean; message: string }>(`${this.baseUrl}/temp-files/${filename}`);
   }
 
   /**
    * 编码本地图像为base64格式
    */
   async encodeLocalImage(filePath: string): Promise<any> {
-    const response = await apiClient.post(`${this.baseUrl}/encode-local`, {
+    return await apiClient.post(`${this.baseUrl}/encode-local`, {
       file_path: filePath
     });
-    return response.data;
   }
 
   /**
@@ -208,7 +226,7 @@ class ImageEditService {
       formData.append('filename', filename);
     }
 
-    const response = await apiClient.post<ImageDownloadResponse>(`${this.baseUrl}/download-to-local`, formData);
+    const response = await apiClient.httpClient.post<ImageDownloadResponse>(`${this.baseUrl}/download-to-local`, formData);
     return response.data;
   }
 
@@ -216,8 +234,7 @@ class ImageEditService {
    * 健康检查
    */
   async healthCheck(): Promise<any> {
-    const response = await apiClient.get(`${this.baseUrl}/health`);
-    return response.data;
+    return await apiClient.get(`${this.baseUrl}/health`);
   }
 }
 

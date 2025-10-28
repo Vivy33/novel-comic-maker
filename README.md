@@ -1,7 +1,13 @@
-# 小说生成漫画应用
+![展示图](https://github.com/user-attachments/assets/69f09f99-f37d-4d55-af17-0d065265400d)<img width="3496" height="4400" alt="组件交互时序图" src="https://github.com/user-attachments/assets/c2f65ea8-4242-4794-8bcf-63aa15b3b72c" /># 小说生成漫画应用
 
 一个基于AI的小说转漫画生成应用，采用Human-in-the-loop理念，支持用户调整AI生成的漫画内容，通过动作编辑、画风滤镜、人物一致性机制降低抽卡成本。
 Demo视频演示：https://zhuanlan.zhihu.com/p/1966151196050972952
+
+展示图：
+![alt text](展示图.jpg)
+
+组件交互时序图：
+![alt text](组件交互时序图.png)
 
 ## 用户分析与痛点
 
